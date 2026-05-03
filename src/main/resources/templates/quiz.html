@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Murder Game - Quiz</title>
+    <link rel="stylesheet" href="/css/quiz.css">
+</head>
+<body>
+<div class="container">
+    <!-- HEADER -->
+    <header class="header">
+        <h1>🎮 Murder Game - Quiz</h1>
+        <div class="team-info">
+            <span id="teamName">Takım: -</span>
+            <span id="userScore">Skor: 0</span>
+        </div>
+    </header>
+
+    <!-- SORU CONTAINER -->
+    <main class="quiz-container">
+        <div id="questionBox" class="question-box hidden">
+            <div class="timer-bar">
+                <div id="timerFill" class="timer-fill"></div>
+            </div>
+            <h2 id="questionText" class="question-text">Soru yükleniyor...</h2>
+
+            <!-- ŞIKLAR -->
+            <div class="options">
+                <button class="option-btn" data-answer="A">
+                    <span class="option-label">A)</span>
+                    <span id="optionA" class="option-text">-</span>
+                </button>
+                <button class="option-btn" data-answer="B">
+                    <span class="option-label">B)</span>
+                    <span id="optionB" class="option-text">-</span>
+                </button>
+                <button class="option-btn" data-answer="C">
+                    <span class="option-label">C)</span>
+                    <span id="optionC" class="option-text">-</span>
+                </button>
+                <button class="option-btn" data-answer="D">
+                    <span class="option-label">D)</span>
+                    <span id="optionD" class="option-text">-</span>
+                </button>
+            </div>
+
+            <!-- GÖNDER BUTONU -->
+            <button id="submitBtn" class="submit-btn" disabled>CEVAPLAŞI GÖNDER</button>
+        </div>
+
+        <!-- BEKLEME DURUMU -->
+        <div id="waitBox" class="wait-box">
+            <h2>Soru Bekleniyor...</h2>
+            <div class="spinner"></div>
+        </div>
+
+        <!-- SONUÇ -->
+        <div id="resultBox" class="result-box hidden">
+            <h2 id="resultTitle">-</h2>
+            <p id="resultMessage">-</p>
+            <p id="resultPoints">-</p>
+        </div>
+    </main>
+
+    <!-- LEADERBOARD -->
+    <aside class="leaderboard">
+        <h3>📊 LEADERBOARD</h3>
+        <div id="leaderboardList" class="leaderboard-list">
+            <p>Yükleniyor...</p>
+        </div>
+    </aside>
+</div>
+
+<!-- SCRIPTS -->
+<script src="https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/stompjs@2.3.3/lib/stomp.min.js"></script>
+<script src="/js/quiz.js"></script>
+</body>
+</html>
