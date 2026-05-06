@@ -63,6 +63,12 @@ public class TeamController {
         return teamService.userJoinTeam(userId, request);
     }
 
+    @DeleteMapping("/admin/{teamId}")
+    @PreAuthorize("hasRole('ADMIN')")
+    public void deleteTeam(@PathVariable Long teamId) {
+        teamService.deleteTeam(teamId);
+    }
+
     // Token'dan userId çıkart (Subject: "USER:5" → 5)
     private Long extractUserIdFromToken(Authentication authentication) {
         String subject = authentication.getName();

@@ -18,4 +18,6 @@ public interface TeamService {
 
     // Admin user çıkarıyor
     AddUserResponse removeUserFromTeam(Long userId);
+
+    void deleteTeam(Long teamId);
 }

@@ -137,6 +137,13 @@ public class TeamServiceImpl implements TeamService {
         );
     }
 
+    @Override
+    public void deleteTeam(Long teamId) {
+        Team team = teamRepository.findById(teamId)
+                .orElseThrow(() -> new RuntimeException("Takım bulunamadı: " + teamId));
+        teamRepository.delete(team);
+    }
+
     private TeamResponse toResponse(Team team) {
         return new TeamResponse(team.getId(), team.getTeamNo(), team.getActive());
     }
