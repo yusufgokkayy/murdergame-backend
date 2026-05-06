@@ -10,6 +10,7 @@ import com.murdergame.team.entity.Team;
 import com.murdergame.team.repository.TeamRepository;
 import com.murdergame.common.exception.ResourceNotFoundException;
 import lombok.RequiredArgsConstructor;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -23,6 +24,7 @@ public class GameRoomServiceImpl implements GameRoomService {
 
     private final GameRoomRepository gameRoomRepository;
     private final TeamRepository teamRepository;
+    private final SimpMessagingTemplate messagingTemplate;
 
     @Override
     public GameRoom createGameRoom() {
@@ -49,8 +51,20 @@ public class GameRoomServiceImpl implements GameRoomService {
         if (newState == GameRoomState.ENDED) {
             gameRoom.setEndedAt(LocalDateTime.now());
         }
+        if (newState == GameRoomState.QUIZ1 || newState == GameRoomState.QUIZ2
+                || newState == GameRoomState.CLUEGAME) {
+            gameRoom.setStartedAt(LocalDateTime.now());
+        }
 
-        return gameRoomRepository.save(gameRoom);
+        GameRoom saved = gameRoomRepository.save(gameRoom);
+
+        // ✅ YENİ — state değişimini broadcast et
+        messagingTemplate.convertAndSend(
+                "/topic/room/" + roomId + "/state",
+                saved.getState().name()   // "QUIZ1", "QUIZ2" vs string olarak gider
+        );
+
+        return saved;
     }
 
     @Override

@@ -66,45 +66,25 @@ public class ClueGameServiceImpl implements ClueGameService {
         ClueGame clueGame = clueGameRepository.findByIdAndIsActiveTrue(request.clueGameId())
                 .orElseThrow(() -> new RuntimeException("Oyun bulunamadı"));
 
-        // Tahmin doğru mu?
-        boolean isCorrect = clueGame.getKillerName()
-                .equalsIgnoreCase(request.guessedName().trim());
-
-        // Puan hesapla
-        int pointsEarned = isCorrect ? 50 : -50;
-
-        // Guess kaydet
+        // Guess kaydet — puan henüz 0, admin sonra verecek
         ClueGameGuess guess = ClueGameGuess.builder()
                 .clueGame(clueGame)
                 .team(team)
                 .user(user)
                 .guessedName(request.guessedName())
-                .isCorrect(isCorrect)
-                .pointsEarned(pointsEarned)
+                .isCorrect(false)   // admin değerlendirecek
+                .pointsEarned(0)    // admin verecek
+                .scored(false)
                 .build();
 
         clueGameGuessRepository.save(guess);
 
-        // Takımın yeni toplam puanını hesapla
-        int quiz1Points = quizAnswerRepository.findByTeamId(team.getId())
-                .stream()
-                .mapToInt(a -> a.getPointsEarned() != null ? a.getPointsEarned() : 0)
-                .sum();
-
-        int clueGamePoints = clueGameGuessRepository.findByClueGameIdAndTeamId(
-                        clueGame.getId(), team.getId())
-                .stream()
-                .mapToInt(g -> g.getPointsEarned())
-                .sum();
-
-        long newTeamTotal = quiz1Points + clueGamePoints;
-
         return new GuessResponse(
                 guess.getId(),
                 request.guessedName(),
-                isCorrect,
-                pointsEarned,
-                newTeamTotal
+                null,   // isCorrect admin bilecek
+                0,      // puan henüz yok
+                null    // total da henüz değişmedi
         );
     }
 

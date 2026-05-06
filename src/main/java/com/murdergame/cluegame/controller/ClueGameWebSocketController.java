@@ -7,8 +7,11 @@ import com.murdergame.cluegame.dto.FinalAnswerResponse;
 import com.murdergame.cluegame.service.ClueGameService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.messaging.handler.annotation.MessageMapping;
+import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Controller;
+
+import java.util.Map;
 
 @Controller
 @RequiredArgsConstructor
@@ -19,8 +22,9 @@ public class ClueGameWebSocketController {
 
     // /app/clue-guess → /topic/clue-game/{{teamId}}/guesses
     @MessageMapping("/clue-guess")
-    public void submitGuess(GuessRequest request) {
-        Long userId = 1L; // ⚠️ WebSocket'ten userId al (JWT ile)
+    public void submitGuess(GuessRequest request, SimpMessageHeaderAccessor headerAccessor) {
+        Long userId = (Long) headerAccessor.getSessionAttributes().get("userId");
+        if (userId == null) return;
 
         GuessResponse response = clueGameService.submitGuess(userId, request);
 
@@ -29,12 +33,24 @@ public class ClueGameWebSocketController {
                 "/topic/clue-game/" + request.teamId() + "/guesses",
                 response
         );
+
+        // Admin ekranına broadcast — puan bekliyor
+        messagingTemplate.convertAndSend(
+                "/topic/clue-game/admin/guesses",
+                Map.of(
+                        "guessId", response.id(),
+                        "teamId", request.teamId(),
+                        "guessedName", request.guessedName(),
+                        "status", "PENDING"
+                )
+        );
     }
 
     // /app/final-answer → /topic/clue-game/{{teamId}}/final
     @MessageMapping("/final-answer")
-    public void submitFinalAnswer(FinalAnswerRequest request) {
-        Long userId = 1L; // ⚠️ WebSocket'ten userId al (JWT ile)
+    public void submitFinalAnswer(FinalAnswerRequest request, SimpMessageHeaderAccessor headerAccessor) {
+        Long userId = (Long) headerAccessor.getSessionAttributes().get("userId");
+        if (userId == null) return;
 
         FinalAnswerResponse response = clueGameService.submitFinalAnswer(userId, request);
 
@@ -42,15 +58,6 @@ public class ClueGameWebSocketController {
         messagingTemplate.convertAndSend(
                 "/topic/clue-game/" + request.teamId() + "/final",
                 response
-        );
-    }
-
-    // Admin: Oyunu başlat (ipuçlarını gönder)
-    @MessageMapping("/start-clue-game")
-    public void startClueGame(Long clueGameId) {
-        messagingTemplate.convertAndSend(
-                "/topic/clue-game/start",
-                clueGameId
         );
     }
 
@@ -63,12 +70,4 @@ public class ClueGameWebSocketController {
         );
     }
 
-    // Admin: Oyun bitti, sonuçlar göster
-    @MessageMapping("/end-clue-game")
-    public void endClueGame(Long clueGameId) {
-        messagingTemplate.convertAndSend(
-                "/topic/clue-game/end",
-                clueGameId
-        );
-    }
 }

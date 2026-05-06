@@ -49,10 +49,12 @@ public class SecurityConfig {
                         // PUBLIC
                         .requestMatchers(
                                 "/api/auth/**",
+                                "/test.html",
                                 "/quiz.html",
                                 "/css/**",
                                 "/js/**",
-                                "/images/**"
+                                "/images/**",
+                                "/ws/**", "/ws", "/ws/info", "/ws/websocket"
                         ).permitAll()
 
                         // ADMIN

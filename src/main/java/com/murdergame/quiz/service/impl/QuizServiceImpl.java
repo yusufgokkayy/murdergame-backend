@@ -15,6 +15,7 @@ import com.murdergame.game.entity.GameRoom;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.bind.annotation.RequestParam;
 
 import java.util.List;
 
@@ -68,7 +69,7 @@ public class QuizServiceImpl implements QuizService {
     }
 
     @Override
-    public SubmitAnswerResponse submitAnswer(Long gameRoomId, Long teamId, SubmitAnswerRequest request) {
+    public SubmitAnswerResponse submitAnswer(Long gameRoomId, @RequestParam Long teamId, SubmitAnswerRequest request) {
         // İmplementasyon burada
         return null;
     }
@@ -87,6 +88,10 @@ public class QuizServiceImpl implements QuizService {
     private QuestionResponse mapToQuestionResponse(Question question) {
         return new QuestionResponse(
                 question.getId(),
+                question.getOptionA(),
+                question.getOptionB(),
+                question.getOptionC(),
+                question.getOptionD(),
                 question.getQuestion(),
                 question.getPoints()
         );

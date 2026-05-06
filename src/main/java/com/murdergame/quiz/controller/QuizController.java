@@ -46,14 +46,14 @@ public class QuizController {
     }
 
     // User: Cevap gönder
-    @PostMapping("/room/{gameRoomId}/submit")
-    @PreAuthorize("hasRole('USER')")
-    public SubmitAnswerResponse submitAnswer(
-            @PathVariable Long gameRoomId,
-            @RequestParam Long teamId,
-            @RequestBody SubmitAnswerRequest request) {
-        return quizService.submitAnswer(gameRoomId, teamId, request);
-    }
+//    @PostMapping("/room/{gameRoomId}/submit")
+//    @PreAuthorize("hasRole('USER')")
+//    public SubmitAnswerResponse submitAnswer(
+//            @PathVariable Long gameRoomId,
+//            @RequestParam Long teamId,
+//            @RequestBody SubmitAnswerRequest request) {
+//        return quizService.submitAnswer(gameRoomId, teamId, request);
+//    }
 
     // Admin: Oda'daki tüm cevapları getir
     @GetMapping("/room/{gameRoomId}/answers")

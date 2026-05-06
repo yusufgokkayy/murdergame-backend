@@ -45,4 +45,10 @@ public class ClueGameGuess {
     @Column(nullable = false, updatable = false)
     @Builder.Default
     private LocalDateTime guessedAt = LocalDateTime.now();
+
+    @Column
+    private Integer adminScore;
+
+    @Column
+    private Boolean scored = false;
 }

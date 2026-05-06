@@ -39,8 +39,4 @@ public class Team {
     @ManyToOne
     @JoinColumn(name = "game_room_id")
     private GameRoom gameRoom;
-
-    @Enumerated(EnumType.STRING)
-    @Builder.Default
-    private TeamStatus status = TeamStatus.NOT_READY;
 }

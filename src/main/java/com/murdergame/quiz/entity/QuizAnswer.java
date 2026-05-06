@@ -49,4 +49,8 @@ public class QuizAnswer {
     @Column(nullable = false, updatable = false)
     @Builder.Default
     private LocalDateTime answeredAt = LocalDateTime.now();
+
+    @Column
+    @Builder.Default
+    private Integer betAmount = 0;
 }

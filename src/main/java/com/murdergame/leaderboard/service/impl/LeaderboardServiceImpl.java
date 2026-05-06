@@ -1,5 +1,6 @@
 package com.murdergame.leaderboard.service.impl;
 
+import com.murdergame.cluegame.repository.ClueGameGuessRepository;
 import com.murdergame.leaderboard.service.LeaderboardService;
 import com.murdergame.leaderboard.dto.LeaderboardResponse;
 import com.murdergame.quiz.repository.QuizAnswerRepository;
@@ -18,6 +19,7 @@ public class LeaderboardServiceImpl implements LeaderboardService {
 
     private final TeamRepository teamRepository;
     private final QuizAnswerRepository quizAnswerRepository;
+    private final ClueGameGuessRepository clueGameGuessRepository;
 
     @Override
     public List<LeaderboardResponse> getLeaderboard() {
@@ -36,15 +38,20 @@ public class LeaderboardServiceImpl implements LeaderboardService {
     }
 
     private LeaderboardResponse getTeamScoreFromTeam(Team team) {
-        int totalScore = quizAnswerRepository.findByTeamId(team.getId())
+        int quizScore = quizAnswerRepository.findByTeamId(team.getId())
                 .stream()
-                .mapToInt(answer -> answer.getPointsEarned() != null ? answer.getPointsEarned() : 0)
+                .mapToInt(a -> a.getPointsEarned() != null ? a.getPointsEarned() : 0)
+                .sum();
+
+        int clueScore = clueGameGuessRepository.findByTeamId(team.getId())
+                .stream()
+                .mapToInt(g -> g.getPointsEarned() != null ? g.getPointsEarned() : 0)
                 .sum();
 
         return new LeaderboardResponse(
                 team.getId(),
                 team.getTeamNo(),
-                totalScore
+                quizScore + clueScore
         );
     }
 }

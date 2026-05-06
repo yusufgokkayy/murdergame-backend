@@ -41,4 +41,8 @@ public class GameRoom {
 
     @Builder.Default
     private Boolean active = true;
+
+    private Long currentQuestionId;
+    private Integer currentQuestionIndex;
+    private LocalDateTime questionStartedAt;
 }

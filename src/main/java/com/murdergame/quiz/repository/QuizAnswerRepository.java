@@ -1,6 +1,8 @@
 package com.murdergame.quiz.repository;
 
+import com.murdergame.quiz.entity.Question;
 import com.murdergame.quiz.entity.QuizAnswer;
+import com.murdergame.team.entity.Team;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
@@ -14,4 +16,6 @@ public interface QuizAnswerRepository extends JpaRepository<QuizAnswer, Long> {
 
     // Eski
     List<QuizAnswer> findByTeamId(Long teamId);
+
+    boolean existsByTeamAndQuestion(Team team, Question question);
 }

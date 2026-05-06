@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WS Test</title>
+    <script src="https://cdn.jsdelivr.net/npm/sockjs-client/dist/sockjs.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/stompjs/lib/stomp.min.js"></script>
+</head>
+<body>
+
+<h3>WebSocket Test</h3>
+
+<div>
+    <b>Token:</b><br>
+    <input id="token" style="width:500px" placeholder="Bearer eyJ..." />
+</div>
+
+<br>
+
+<div>
+    <b>Room ID:</b>
+    <input id="roomId" value="1"/>
+
+    <button onclick="connect()">Bağlan</button>
+    <button onclick="disconnect()">Disconnect</button>
+    <button onclick="nextQuestion()">Next Question (Admin)</button>
+    <button onclick="sendAnswer()">Cevap Gönder (User)</button>
+</div>
+
+<br>
+
+<div>
+    <b>Cevap:</b>
+    <select id="answer">
+        <option value="A">A</option>
+        <option value="B">B</option>
+        <option value="C">C</option>
+        <option value="D">D</option>
+    </select>
+
+    <b>Soru ID:</b>
+    <input id="qId" value="1" style="width:50px"/>
+</div>
+
+<br>
+
+<div>
+    <b>Console:</b><br>
+    <textarea id="log" style="width:700px;height:300px;font-family:monospace"></textarea>
+</div>
+
+<script>
+    let stompClient = null;
+
+    /* ---------- UTIL ---------- */
+
+    function log(msg) {
+      const ta = document.getElementById('log');
+      ta.value += new Date().toLocaleTimeString() + ' — ' + msg + '\n';
+      ta.scrollTop = ta.scrollHeight;
+    }
+
+    function pretty(msg) {
+      try { return JSON.stringify(JSON.parse(msg), null, 2); }
+      catch { return msg; }
+    }
+
+    /* ---------- CONNECTION ---------- */
+
+    function connect() {
+      const tokenInput = document.getElementById('token').value;
+      const roomId = document.getElementById('roomId').value;
+
+      if (!tokenInput) {
+        log("Token gir!");
+        return;
+      }
+
+      const token = tokenInput.startsWith("Bearer ")
+        ? tokenInput
+        : "Bearer " + tokenInput;
+
+      // eski bağlantıyı temizle
+      if (stompClient) {
+        try { stompClient.disconnect(); } catch {}
+        stompClient = null;
+      }
+
+      const socket = new SockJS(window.location.origin + '/ws');
+      stompClient = Stomp.over(socket);
+      stompClient.debug = null;
+
+      stompClient.onclose = () => log("Bağlantı kapandı");
+
+      stompClient.connect(
+        { Authorization: token },
+        () => {
+          log("Bağlantı kuruldu");
+
+          subscribeTopics(roomId);
+        },
+        (err) => {
+          log("HATA: " + JSON.stringify(err));
+        }
+      );
+    }
+
+    function disconnect() {
+      if (!stompClient) {
+        log("Zaten bağlı değil");
+        return;
+      }
+
+      try {
+        stompClient.disconnect(() => {
+          log("Bağlantı kapatıldı");
+        });
+      } catch {
+        log("Disconnect hatası");
+      }
+
+      stompClient = null;
+    }
+
+    /* ---------- SUBSCRIBE ---------- */
+
+    function subscribeTopics(roomId) {
+
+      stompClient.subscribe(`/topic/room/${roomId}/question`, (msg) => {
+        log("SORU GELDI:\n" + pretty(msg.body));
+      });
+
+      stompClient.subscribe(`/topic/room/${roomId}/leaderboard`, (msg) => {
+        log("LEADERBOARD:\n" + pretty(msg.body));
+      });
+
+      stompClient.subscribe(`/topic/room/${roomId}/question-result`, (msg) => {
+        log("SORU BITTI:\n" + pretty(msg.body));
+      });
+
+    }
+
+    /* ---------- ACTIONS ---------- */
+
+    function nextQuestion() {
+      const roomId = document.getElementById('roomId').value;
+
+      if (!stompClient) {
+        log("Önce bağlan!");
+        return;
+      }
+
+      stompClient.send(`/app/quiz/${roomId}/next-question`, {}, '{}');
+      log("next-question gönderildi");
+    }
+
+    function sendAnswer() {
+      const roomId = document.getElementById('roomId').value;
+
+      if (!stompClient) {
+        log("Önce bağlan!");
+        return;
+      }
+
+      const payload = {
+        questionId: parseInt(document.getElementById('qId').value),
+        selectedAnswer: document.getElementById('answer').value
+      };
+
+      stompClient.send(
+        `/app/quiz/${roomId}/answer`,
+        {},
+        JSON.stringify(payload)
+      );
+
+      log("Cevap gönderildi:\n" + JSON.stringify(payload, null, 2));
+    }
+</script>
+
+</body>
+</html>
