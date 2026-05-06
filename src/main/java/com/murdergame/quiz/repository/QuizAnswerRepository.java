@@ -18,4 +18,6 @@ public interface QuizAnswerRepository extends JpaRepository<QuizAnswer, Long> {
     List<QuizAnswer> findByTeamId(Long teamId);
 
     boolean existsByTeamAndQuestion(Team team, Question question);
+
+    void deleteByTeamId(Long teamId);
 }

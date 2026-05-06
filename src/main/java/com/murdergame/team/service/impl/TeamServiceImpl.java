@@ -4,6 +4,7 @@ import com.murdergame.common.exception.BusinessException;
 import com.murdergame.common.exception.InvalidCredentialsException;
 import com.murdergame.common.exception.ResourceNotFoundException;
 import com.murdergame.common.exception.ValidationException;
+import com.murdergame.quiz.repository.QuizAnswerRepository;
 import com.murdergame.team.dto.CreateTeamRequest;
 import com.murdergame.team.dto.TeamResponse;
 import com.murdergame.team.dto.AddUserResponse;
@@ -28,6 +29,7 @@ public class TeamServiceImpl implements TeamService {
     private final TeamRepository teamRepository;
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
+    private final QuizAnswerRepository quizAnswerRepository;
 
     @Override
     public TeamResponse createTeam(CreateTeamRequest request) {
@@ -138,9 +140,19 @@ public class TeamServiceImpl implements TeamService {
     }
 
     @Override
+    @Transactional
     public void deleteTeam(Long teamId) {
+
         Team team = teamRepository.findById(teamId)
                 .orElseThrow(() -> new RuntimeException("Takım bulunamadı: " + teamId));
+
+        // 1. users detach et
+        userRepository.clearTeam(teamId); // team_id = null yap
+
+        // 2. quiz answers sil (veya detach)
+        quizAnswerRepository.deleteByTeamId(teamId);
+
+        // 3. team sil
         teamRepository.delete(team);
     }
 

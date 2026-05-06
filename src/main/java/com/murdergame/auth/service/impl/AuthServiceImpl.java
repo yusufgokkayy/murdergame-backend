@@ -20,6 +20,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.List;
 import java.util.Map;
 
 @Service
@@ -61,6 +62,18 @@ public class AuthServiceImpl implements AuthService {
                 null,
                 admin.getUsername()
         );
+    }
+
+    @Override
+    public List<UserResponse> getAllUsers() {
+        return userRepository.findAll()
+                .stream()
+                .map(user -> new UserResponse(
+                        user.getId(),
+                        user.getUsername(),
+                        user.getTeam() != null ? user.getTeam().getId() : null
+                ))
+                .toList();
     }
 
     @Override
