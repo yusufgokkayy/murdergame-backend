@@ -63,6 +63,14 @@ public class TeamController {
         return teamService.userJoinTeam(userId, request);
     }
 
+    // YENİ EKLENEN ENDPOINT
+    // Admin: Takıma sözcü ata
+    @PostMapping("/admin/{teamId}/set-spokesperson/{userId}")
+    @PreAuthorize("hasRole('ADMIN')")
+    public AddUserResponse setSpokesperson(@PathVariable Long teamId, @PathVariable Long userId) {
+        return teamService.setSpokesperson(teamId, userId);
+    }
+
     @DeleteMapping("/admin/{teamId}")
     @PreAuthorize("hasRole('ADMIN')")
     public void deleteTeam(@PathVariable Long teamId) {

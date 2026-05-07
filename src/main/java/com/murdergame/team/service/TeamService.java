@@ -19,5 +19,8 @@ public interface TeamService {
     // Admin user çıkarıyor
     AddUserResponse removeUserFromTeam(Long userId);
 
+    // YENİ: Sözcü atama
+    AddUserResponse setSpokesperson(Long teamId, Long userId);
+
     void deleteTeam(Long teamId);
 }

@@ -44,4 +44,7 @@ public class Team {
 
     @OneToMany(mappedBy = "team", cascade = CascadeType.REMOVE, orphanRemoval = true)
     private List<QuizAnswer> quizAnswers;
+
+    @Column(name = "spokesperson_id")
+    private Long spokespersonId;
 }

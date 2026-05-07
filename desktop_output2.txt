@@ -1,0 +1,3339 @@
+﻿=== MurderGameApplication.java ===
+package com.murdergame;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class MurderGameApplication {
+
+	public static void main(String[] args) {
+		SpringApplication.run(MurderGameApplication.class, args);
+	}
+}
+=== AdminController.java ===
+package com.murdergame.auth.controller;
+
+import com.murdergame.auth.dto.UserResponse;
+import com.murdergame.auth.service.AuthService;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+
+@RestController
+@RequestMapping("/api/admin")
+@RequiredArgsConstructor
+@PreAuthorize("hasRole('ADMIN')")
+public class AdminController {
+
+    private final AuthService authService;
+
+    @GetMapping("/users")
+    public ResponseEntity<List<UserResponse>> getAllUsers() {
+        return ResponseEntity.ok(authService.getAllUsers());
+    }
+
+    @DeleteMapping("/users/{userId}")
+    public ResponseEntity<String> deleteUser(@PathVariable Long userId) {
+        authService.deleteUser(userId);
+        return ResponseEntity.ok("KullanÄ±cÄ± silindi.");
+    }
+}
+=== AuthController.java ===
+package com.murdergame.auth.controller;
+
+import com.murdergame.auth.dto.*;
+import com.murdergame.auth.service.AuthService;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+
+@RestController
+@RequestMapping("/api/auth")
+@RequiredArgsConstructor
+public class AuthController {
+
+    private final AuthService authService;
+
+    @PostMapping("/admin/login")
+    public AuthResponse adminLogin(@RequestBody AdminLoginRequest request) {
+        return authService.adminLogin(request);
+    }
+
+    @PostMapping("/user/login")
+    public AuthResponse userLogin(@RequestBody UserLoginRequest request) {
+        return authService.userLogin(request);
+    }
+
+    @PostMapping("/user/register")
+    @ResponseStatus(HttpStatus.CREATED)
+    public AuthResponse userRegister(@RequestBody UserRegisterRequest request) {
+        return authService.userRegister(request);
+    }
+}
+=== AdminLoginRequest.java ===
+package com.murdergame.auth.dto;
+
+import jakarta.validation.constraints.NotBlank;
+
+public record AdminLoginRequest(
+        @NotBlank String username,
+        @NotBlank String password
+) {}
+=== AuthResponse.java ===
+package com.murdergame.auth.dto;
+
+public record AuthResponse(
+        String accessToken,
+        // String refreshToken, â† SÄ°L
+        String role,
+        Long userId,
+        Long teamId,
+        String username
+) {}
+=== UserLoginRequest.java ===
+package com.murdergame.auth.dto;
+
+import jakarta.validation.constraints.NotBlank;
+
+public record UserLoginRequest(
+        @NotBlank String teamNo,
+        @NotBlank String teamPassword,
+        @NotBlank String username
+) {}
+=== UserRegisterRequest.java ===
+package com.murdergame.auth.dto;
+
+import jakarta.validation.constraints.NotBlank;
+
+public record UserRegisterRequest(
+        @NotBlank(message = "Username boÅŸ olamaz")
+        String username
+) {}
+=== UserResponse.java ===
+package com.murdergame.auth.dto;
+
+public record UserResponse (
+    Long userId,
+    String username,
+    Long teamId
+) {}
+=== Admin.java ===
+package com.murdergame.auth.entity;
+
+import jakarta.persistence.*;
+import lombok.Getter;
+import lombok.Setter;
+
+import java.time.LocalDateTime;
+
+@Entity
+@Table(name = "admins")
+@Getter
+@Setter
+public class Admin {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(nullable = false, unique = true, length = 64)
+    private String username;
+
+    @Column(name = "password_hash", nullable = false, length = 255)
+    private String passwordHash;
+
+    @Column(nullable = false)
+    private boolean active = true;
+
+    @Column(name = "created_at", nullable = false)
+    private LocalDateTime createdAt = LocalDateTime.now();
+}
+=== AdminRepository.java ===
+package com.murdergame.auth.repository;
+
+import com.murdergame.auth.entity.Admin;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+import java.util.Optional;
+
+public interface AdminRepository extends JpaRepository<Admin, Long> {
+    Optional<Admin> findByUsernameAndActiveTrue(String username);
+}
+=== AuthService.java ===
+package com.murdergame.auth.service;
+
+import com.murdergame.auth.dto.*;
+
+import java.util.List;
+
+public interface AuthService {
+    AuthResponse adminLogin(AdminLoginRequest request);
+    AuthResponse userLogin(UserLoginRequest request);
+    AuthResponse userRegister(UserRegisterRequest request);
+    // refresh() METHOD SÄ°L
+    List<UserResponse> getAllUsers();
+
+    void deleteUser(Long userId);
+
+}
+=== AuthServiceImpl.java ===
+package com.murdergame.auth.service.impl;
+
+import com.murdergame.auth.entity.Admin;
+import com.murdergame.auth.repository.AdminRepository;
+import com.murdergame.auth.dto.*;
+import com.murdergame.auth.service.AuthService;
+import com.murdergame.common.exception.BusinessException;
+import com.murdergame.common.exception.InvalidCredentialsException;
+import com.murdergame.common.exception.ResourceNotFoundException;
+import com.murdergame.common.exception.ValidationException;
+import com.murdergame.security.JwtService;
+import com.murdergame.team.entity.Team;
+import com.murdergame.team.repository.TeamRepository;
+import com.murdergame.user.entity.User;
+import com.murdergame.user.repository.UserRepository;
+import com.murdergame.user.validator.UsernameValidator;
+import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.List;
+import java.util.Map;
+
+@Service
+@RequiredArgsConstructor
+public class AuthServiceImpl implements AuthService {
+
+    private final AdminRepository adminRepository;
+    private final TeamRepository teamRepository;
+    private final UserRepository userRepository;
+    private final PasswordEncoder passwordEncoder;
+    private final JwtService jwtService;
+    private final UsernameValidator usernameValidator;
+
+    @Value("${app.jwt.access-expiration-hours:8}")
+    private long accessExpHours;
+
+    @Override
+    @Transactional
+    public AuthResponse adminLogin(AdminLoginRequest request) {
+        Admin admin = adminRepository.findByUsernameAndActiveTrue(request.username())
+                .orElseThrow(() -> new InvalidCredentialsException("GeÃ§ersiz kimlik bilgileri"));
+
+        if (!passwordEncoder.matches(request.password(), admin.getPasswordHash())) {
+            throw new InvalidCredentialsException("GeÃ§ersiz kimlik bilgileri");
+        }
+
+        String subject = "ADMIN:" + admin.getId();
+        String accessToken = jwtService.generateAccessToken(subject, Map.of(
+                "role", "ADMIN",
+                "adminId", admin.getId(),
+                "username", admin.getUsername()
+        ));
+
+        return new AuthResponse(
+                accessToken,
+                // refreshToken silinir
+                "ADMIN",
+                admin.getId(),
+                null,
+                admin.getUsername()
+        );
+    }
+
+    @Override
+    public List<UserResponse> getAllUsers() {
+        return userRepository.findAll()
+                .stream()
+                .map(user -> new UserResponse(
+                        user.getId(),
+                        user.getUsername(),
+                        user.getTeam() != null ? user.getTeam().getId() : null
+                ))
+                .toList();
+    }
+
+    @Override
+    public void deleteUser(Long userId) {
+
+        User user = userRepository.findById(userId)
+                .orElseThrow(() ->
+                        new RuntimeException("KullanÄ±cÄ± bulunamadÄ±: " + userId));
+
+        userRepository.delete(user);
+    }
+
+    @Override
+    @Transactional
+    public AuthResponse userRegister(UserRegisterRequest request) {
+        String validationError = usernameValidator.getValidationError(request.username());
+        if (validationError != null) {
+            throw new ValidationException(validationError);
+        }
+
+        if (userRepository.existsByUsername(request.username())) {
+            throw new BusinessException("Bu kullanÄ±cÄ± adÄ± zaten alÄ±nmÄ±ÅŸ");
+        }
+
+        User user = new User();
+        user.setUsername(request.username());
+        user.setActive(true);
+        user.setTeam(null);
+
+        User saved = userRepository.save(user);
+
+        String subject = "USER:" + saved.getId();
+        String accessToken = jwtService.generateAccessToken(subject, Map.of(
+                "role", "USER",
+                "userId", saved.getId(),
+                "username", saved.getUsername()
+        ));
+
+        return new AuthResponse(
+                accessToken,
+                // refreshToken silinir
+                "USER",
+                saved.getId(),
+                null,
+                saved.getUsername()
+        );
+    }
+
+    @Override
+    @Transactional
+    public AuthResponse userLogin(UserLoginRequest request) {
+        Team team = teamRepository.findByTeamNo(request.teamNo())
+                .orElseThrow(() -> new ResourceNotFoundException("TakÄ±m bulunamadÄ±"));
+
+        if (!passwordEncoder.matches(request.teamPassword(), team.getTeamPasswordHash())) {
+            throw new InvalidCredentialsException("TakÄ±m ÅŸifresi yanlÄ±ÅŸ");
+        }
+
+        User user = userRepository.findByTeamIdAndUsernameAndActiveTrue(team.getId(), request.username())
+                .orElseThrow(() -> new ResourceNotFoundException("KullanÄ±cÄ± bu takÄ±mda bulunamadÄ±"));
+
+        String subject = "USER:" + user.getId();
+        String accessToken = jwtService.generateAccessToken(subject, Map.of(
+                "role", "USER",
+                "userId", user.getId(),
+                "teamId", team.getId(),
+                "username", user.getUsername()
+        ));
+
+        return new AuthResponse(
+                accessToken,
+                // refreshToken silinir
+                "USER",
+                user.getId(),
+                team.getId(),
+                user.getUsername()
+        );
+    }
+}
+=== ClueGameAdminController.java ===
+package com.murdergame.cluegame.controller;
+
+import com.murdergame.cluegame.entity.ClueGameGuess;
+import com.murdergame.cluegame.repository.ClueGameGuessRepository;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.Map;
+
+@RestController
+@RequestMapping("/api/admin/clue-game")
+@RequiredArgsConstructor
+@PreAuthorize("hasRole('ADMIN')")
+public class ClueGameAdminController {
+
+    private final SimpMessagingTemplate messagingTemplate;
+    private final ClueGameGuessRepository clueGameGuessRepository;
+
+    // Oyunu baÅŸlat
+    @PostMapping("/start/{clueGameId}")
+    @ResponseStatus(HttpStatus.OK)
+    public void startClueGame(@PathVariable Long clueGameId) {
+        messagingTemplate.convertAndSend("/topic/clue-game/start", clueGameId);
+    }
+
+    // 30 dakika sonra: Final cevap zamanÄ±
+    @PostMapping("/final-time/{clueGameId}")
+    @ResponseStatus(HttpStatus.OK)
+    public void finalAnswerTime(@PathVariable Long clueGameId) {
+        messagingTemplate.convertAndSend("/topic/clue-game/final-time", clueGameId);
+    }
+
+    // Oyun bitti
+    @PostMapping("/end/{clueGameId}")
+    @ResponseStatus(HttpStatus.OK)
+    public void endClueGame(@PathVariable Long clueGameId) {
+        messagingTemplate.convertAndSend("/topic/clue-game/end", clueGameId);
+    }
+
+    @PostMapping("/extend-time/{roomId}")
+    public void extendTime(
+            @PathVariable Long roomId,
+            @RequestBody Map<String, Integer> body) {
+
+        Integer minutes = body.get("minutes");
+        if (minutes == null || minutes <= 0) minutes = 5;
+
+        messagingTemplate.convertAndSend(
+                "/topic/room/" + roomId + "/time-extended",
+                Map.of("extraMinutes", minutes)
+        );
+    }
+
+    @PostMapping("/guess/{guessId}/score")
+    public void scoreGuess(
+            @PathVariable Long guessId,
+            @RequestBody Map<String, Integer> body) {
+
+        Integer score = body.get("score");
+        if (score == null || (!score.equals(0) && !score.equals(50) && !score.equals(100))) {
+            throw new RuntimeException("GeÃ§ersiz puan, 0/50/100 olmalÄ±");
+        }
+
+        ClueGameGuess guess = clueGameGuessRepository.findById(guessId)
+                .orElseThrow(() -> new RuntimeException("Tahmin bulunamadÄ±"));
+
+        if (guess.getScored()) {
+            throw new RuntimeException("Bu tahmin zaten puanlandÄ±");
+        }
+
+        guess.setAdminScore(score);
+        guess.setPointsEarned(score);
+        guess.setScored(true);
+        clueGameGuessRepository.save(guess);
+
+        // TakÄ±ma broadcast et
+        messagingTemplate.convertAndSend(
+                "/topic/clue-game/" + guess.getTeam().getId() + "/score",
+                Map.of(
+                        "guessId", guessId,
+                        "score", score,
+                        "teamId", guess.getTeam().getId()
+                )
+        );
+
+        // Admin ekranÄ±na da broadcast et
+        messagingTemplate.convertAndSend(
+                "/topic/clue-game/admin/scored",
+                Map.of(
+                        "guessId", guessId,
+                        "score", score,
+                        "teamId", guess.getTeam().getId(),
+                        "guessedName", guess.getGuessedName()
+                )
+        );
+    }
+}
+=== ClueGameWebSocketController.java ===
+package com.murdergame.cluegame.controller;
+
+import com.murdergame.cluegame.dto.GuessRequest;
+import com.murdergame.cluegame.dto.GuessResponse;
+import com.murdergame.cluegame.dto.FinalAnswerRequest;
+import com.murdergame.cluegame.dto.FinalAnswerResponse;
+import com.murdergame.cluegame.service.ClueGameService;
+import lombok.RequiredArgsConstructor;
+import org.springframework.messaging.handler.annotation.MessageMapping;
+import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.stereotype.Controller;
+
+import java.util.Map;
+
+@Controller
+@RequiredArgsConstructor
+public class ClueGameWebSocketController {
+
+    private final ClueGameService clueGameService;
+    private final SimpMessagingTemplate messagingTemplate;
+
+    // /app/clue-guess â†’ /topic/clue-game/{{teamId}}/guesses
+    @MessageMapping("/clue-guess")
+    public void submitGuess(GuessRequest request, SimpMessageHeaderAccessor headerAccessor) {
+        Long userId = (Long) headerAccessor.getSessionAttributes().get("userId");
+        if (userId == null) return;
+
+        GuessResponse response = clueGameService.submitGuess(userId, request);
+
+        // TÃœM TAKIMDA BROADCAST ET
+        messagingTemplate.convertAndSend(
+                "/topic/clue-game/" + request.teamId() + "/guesses",
+                response
+        );
+
+        // Admin ekranÄ±na broadcast â€” puan bekliyor
+        messagingTemplate.convertAndSend(
+                "/topic/clue-game/admin/guesses",
+                Map.of(
+                        "guessId", response.id(),
+                        "teamId", request.teamId(),
+                        "guessedName", request.guessedName(),
+                        "status", "PENDING"
+                )
+        );
+    }
+
+    // /app/final-answer â†’ /topic/clue-game/{{teamId}}/final
+    @MessageMapping("/final-answer")
+    public void submitFinalAnswer(FinalAnswerRequest request, SimpMessageHeaderAccessor headerAccessor) {
+        Long userId = (Long) headerAccessor.getSessionAttributes().get("userId");
+        if (userId == null) return;
+
+        FinalAnswerResponse response = clueGameService.submitFinalAnswer(userId, request);
+
+        // TÃœM TAKIMDA BROADCAST ET
+        messagingTemplate.convertAndSend(
+                "/topic/clue-game/" + request.teamId() + "/final",
+                response
+        );
+    }
+
+    // Admin: 30 dakika bitti, final cevap zamanÄ±
+    @MessageMapping("/final-answer-time")
+    public void finalAnswerTime(Long clueGameId) {
+        messagingTemplate.convertAndSend(
+                "/topic/clue-game/final-time",
+                clueGameId
+        );
+    }
+
+}
+=== ClueGameRequest.java ===
+package com.murdergame.cluegame.dto;
+
+import java.util.List;
+
+public record ClueGameRequest(
+        String killerName,
+        String trueStory,
+        List<String> clues
+) {}
+=== ClueGameResponse.java ===
+package com.murdergame.cluegame.dto;
+
+import java.util.List;
+
+public record ClueGameResponse(
+        Long id,
+        List<String> clues,
+        Integer totalClues
+) {}
+=== FinalAnswerRequest.java ===
+package com.murdergame.cluegame.dto;
+
+public record FinalAnswerRequest(
+        Long clueGameId,
+        Long teamId,
+        String finalGuess
+) {}
+=== FinalAnswerResponse.java ===
+package com.murdergame.cluegame.dto;
+
+public record FinalAnswerResponse(
+        Long id,
+        String finalGuess,
+        Boolean isCorrect,
+        String killerName,
+        String trueStory
+) {}
+=== GuessRequest.java ===
+package com.murdergame.cluegame.dto;
+
+public record GuessRequest(
+        Long clueGameId,
+        Long teamId,
+        String guessedName
+) {}
+=== GuessResponse.java ===
+package com.murdergame.cluegame.dto;
+
+public record GuessResponse(
+        Long id,
+        String guessedName,
+        Boolean isCorrect,      // null = admin henÃ¼z deÄŸerlendirmedi
+        Integer pointsEarned,
+        Long newTeamTotal       // null = henÃ¼z hesaplanmadÄ±
+) {}
+=== ClueGame.java ===
+package com.murdergame.cluegame.entity;
+
+import jakarta.persistence.*;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+import com.murdergame.team.entity.Team;
+import com.murdergame.user.entity.User;
+import java.time.LocalDateTime;
+import java.util.List;
+
+@Entity
+@Table(name = "clue_games")
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public class ClueGame {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(nullable = false)
+    private String killerName; // Katilin gerÃ§ek adÄ±
+
+    @Column(nullable = false, columnDefinition = "TEXT")
+    private String trueStory; // GerÃ§ek hikaye
+
+    @ElementCollection
+    @CollectionTable(name = "clue_game_clues", joinColumns = @JoinColumn(name = "clue_game_id"))
+    @OrderColumn(name = "clue_order")
+    private List<String> clues; // Ä°puÃ§larÄ± listesi
+
+    @OneToMany(mappedBy = "clueGame", cascade = CascadeType.ALL)
+    private List<ClueGameGuess> guesses; // TÃ¼m tahminler
+
+    @OneToMany(mappedBy = "clueGame", cascade = CascadeType.ALL)
+    private List<ClueGameFinalAnswer> finalAnswers; // 30 dakika sonraki cevaplar
+
+    @Column(nullable = false, updatable = false)
+    @Builder.Default
+    private LocalDateTime createdAt = LocalDateTime.now();
+
+    @Column(nullable = false)
+    @Builder.Default
+    private Boolean isActive = true;
+}
+=== ClueGameFinalAnswer.java ===
+package com.murdergame.cluegame.entity;
+
+import jakarta.persistence.*;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+import com.murdergame.team.entity.Team;
+import java.time.LocalDateTime;
+
+@Entity
+@Table(name = "clue_game_final_answers")
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public class ClueGameFinalAnswer {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "clue_game_id", nullable = false)
+    private ClueGame clueGame;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "team_id", nullable = false)
+    private Team team;
+
+    @Column(nullable = false)
+    private String finalGuess;
+
+    @Column(nullable = false)
+    private Boolean isCorrect;
+
+    @Column(nullable = false, updatable = false)
+    @Builder.Default
+    private LocalDateTime answeredAt = LocalDateTime.now();
+}
+=== ClueGameGuess.java ===
+package com.murdergame.cluegame.entity;
+
+import jakarta.persistence.*;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+import com.murdergame.team.entity.Team;
+import com.murdergame.user.entity.User;
+import java.time.LocalDateTime;
+
+@Entity
+@Table(name = "clue_game_guesses")
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public class ClueGameGuess {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "clue_game_id", nullable = false)
+    private ClueGame clueGame;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "team_id", nullable = false)
+    private Team team;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "user_id", nullable = false)
+    private User user;
+
+    @Column(nullable = false)
+    private String guessedName;
+
+    @Column(nullable = false)
+    private Boolean isCorrect;
+
+    @Column(nullable = false)
+    private Integer pointsEarned; // +50 veya -50
+
+    @Column(nullable = false, updatable = false)
+    @Builder.Default
+    private LocalDateTime guessedAt = LocalDateTime.now();
+
+    @Column
+    private Integer adminScore;
+
+    @Column
+    private Boolean scored = false;
+}
+=== ClueGameFinalAnswerRepository.java ===
+package com.murdergame.cluegame.repository;
+
+import com.murdergame.cluegame.entity.ClueGameFinalAnswer;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.stereotype.Repository;
+import java.util.Optional;
+
+@Repository
+public interface ClueGameFinalAnswerRepository extends JpaRepository<ClueGameFinalAnswer, Long> {
+    Optional<ClueGameFinalAnswer> findByClueGameIdAndTeamId(Long clueGameId, Long teamId);
+}
+=== ClueGameGuessRepository.java ===
+package com.murdergame.cluegame.repository;
+
+import com.murdergame.cluegame.entity.ClueGameGuess;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.stereotype.Repository;
+import java.util.List;
+import java.util.Optional;
+
+@Repository
+public interface ClueGameGuessRepository extends JpaRepository<ClueGameGuess, Long> {
+    List<ClueGameGuess> findByClueGameIdAndTeamId(Long clueGameId, Long teamId);
+    List<ClueGameGuess> findByClueGameId(Long clueGameId);
+    List<ClueGameGuess> findByTeamId(Long teamId);
+    Optional<ClueGameGuess> findById(Long id);
+}
+=== ClueGameRepository.java ===
+package com.murdergame.cluegame.repository;
+
+import com.murdergame.cluegame.entity.ClueGame;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.stereotype.Repository;
+import java.util.Optional;
+
+@Repository
+public interface ClueGameRepository extends JpaRepository<ClueGame, Long> {
+    Optional<ClueGame> findByIdAndIsActiveTrue(Long id);
+}
+=== ClueGameService.java ===
+package com.murdergame.cluegame.service;
+
+import com.murdergame.cluegame.dto.*;
+import com.murdergame.cluegame.entity.ClueGame;
+
+public interface ClueGameService {
+    ClueGame createClueGame(ClueGameRequest request);
+    ClueGameResponse getClueGame(Long clueGameId);
+    GuessResponse submitGuess(Long userId, GuessRequest request);
+    FinalAnswerResponse submitFinalAnswer(Long userId, FinalAnswerRequest request);
+}
+=== ClueGameServiceImpl.java ===
+package com.murdergame.cluegame.service.impl;
+
+import com.murdergame.cluegame.service.ClueGameService;
+import com.murdergame.cluegame.dto.*;
+import com.murdergame.cluegame.entity.ClueGame;
+import com.murdergame.cluegame.entity.ClueGameGuess;
+import com.murdergame.cluegame.entity.ClueGameFinalAnswer;
+import com.murdergame.cluegame.repository.ClueGameRepository;
+import com.murdergame.cluegame.repository.ClueGameGuessRepository;
+import com.murdergame.cluegame.repository.ClueGameFinalAnswerRepository;
+import com.murdergame.quiz.repository.QuizAnswerRepository;
+import com.murdergame.team.entity.Team;
+import com.murdergame.team.repository.TeamRepository;
+import com.murdergame.user.entity.User;
+import com.murdergame.user.repository.UserRepository;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import java.util.List;
+
+@Service
+@RequiredArgsConstructor
+@Transactional
+public class ClueGameServiceImpl implements ClueGameService {
+
+    private final ClueGameRepository clueGameRepository;
+    private final ClueGameGuessRepository clueGameGuessRepository;
+    private final ClueGameFinalAnswerRepository clueGameFinalAnswerRepository;
+    private final TeamRepository teamRepository;
+    private final UserRepository userRepository;
+    private final QuizAnswerRepository quizAnswerRepository;
+
+    @Override
+    public ClueGame createClueGame(ClueGameRequest request) {
+        ClueGame clueGame = ClueGame.builder()
+                .killerName(request.killerName())
+                .trueStory(request.trueStory())
+                .clues(request.clues())
+                .isActive(true)
+                .build();
+
+        return clueGameRepository.save(clueGame);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ClueGameResponse getClueGame(Long clueGameId) {
+        ClueGame clueGame = clueGameRepository.findByIdAndIsActiveTrue(clueGameId)
+                .orElseThrow(() -> new RuntimeException("Oyun bulunamadÄ±"));
+
+        return new ClueGameResponse(
+                clueGame.getId(),
+                clueGame.getClues(),
+                clueGame.getClues().size()
+        );
+    }
+
+    @Override
+    public GuessResponse submitGuess(Long userId, GuessRequest request) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("KullanÄ±cÄ± bulunamadÄ±"));
+
+        Team team = teamRepository.findById(request.teamId())
+                .orElseThrow(() -> new RuntimeException("TakÄ±m bulunamadÄ±"));
+
+        ClueGame clueGame = clueGameRepository.findByIdAndIsActiveTrue(request.clueGameId())
+                .orElseThrow(() -> new RuntimeException("Oyun bulunamadÄ±"));
+
+        // Guess kaydet â€” puan henÃ¼z 0, admin sonra verecek
+        ClueGameGuess guess = ClueGameGuess.builder()
+                .clueGame(clueGame)
+                .team(team)
+                .user(user)
+                .guessedName(request.guessedName())
+                .isCorrect(false)   // admin deÄŸerlendirecek
+                .pointsEarned(0)    // admin verecek
+                .scored(false)
+                .build();
+
+        clueGameGuessRepository.save(guess);
+
+        return new GuessResponse(
+                guess.getId(),
+                request.guessedName(),
+                null,   // isCorrect admin bilecek
+                0,      // puan henÃ¼z yok
+                null    // total da henÃ¼z deÄŸiÅŸmedi
+        );
+    }
+
+    @Override
+    public FinalAnswerResponse submitFinalAnswer(Long userId, FinalAnswerRequest request) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("KullanÄ±cÄ± bulunamadÄ±"));
+
+        Team team = teamRepository.findById(request.teamId())
+                .orElseThrow(() -> new RuntimeException("TakÄ±m bulunamadÄ±"));
+
+        ClueGame clueGame = clueGameRepository.findByIdAndIsActiveTrue(request.clueGameId())
+                .orElseThrow(() -> new RuntimeException("Oyun bulunamadÄ±"));
+
+        // Final cevap doÄŸru mu?
+        boolean isCorrect = clueGame.getKillerName()
+                .equalsIgnoreCase(request.finalGuess().trim());
+
+        // Final answer kaydet
+        ClueGameFinalAnswer finalAnswer = ClueGameFinalAnswer.builder()
+                .clueGame(clueGame)
+                .team(team)
+                .finalGuess(request.finalGuess())
+                .isCorrect(isCorrect)
+                .build();
+
+        clueGameFinalAnswerRepository.save(finalAnswer);
+
+        return new FinalAnswerResponse(
+                finalAnswer.getId(),
+                request.finalGuess(),
+                isCorrect,
+                clueGame.getKillerName(),
+                isCorrect ? clueGame.getTrueStory() : null
+        );
+    }
+}
+=== SecurityBeansConfig.java ===
+package com.murdergame.common.config;
+
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+
+@Configuration
+public class SecurityBeansConfig {
+
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
+    }
+}
+=== SecurityConfig.java ===
+package com.murdergame.common.config;
+
+import com.murdergame.security.JwtAuthFilter;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+
+@Configuration
+@EnableWebSecurity
+@EnableMethodSecurity
+public class SecurityConfig {
+
+    private final JwtAuthFilter jwtAuthFilter;
+
+    public SecurityConfig(JwtAuthFilter jwtAuthFilter) {
+        this.jwtAuthFilter = jwtAuthFilter;
+    }
+
+    @Bean
+    public AuthenticationManager authenticationManager(AuthenticationConfiguration config) throws Exception {
+        return config.getAuthenticationManager();
+    }
+
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+        http
+                // CORS ENABLE (KRÄ°TÄ°K)
+                .cors(cors -> {})
+
+                .csrf(csrf -> csrf.disable())
+
+                .sessionManagement(session ->
+                        session.sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+                )
+
+                .authorizeHttpRequests(authz -> authz
+
+                        // Preflight request (KRÄ°TÄ°K)
+                        .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+
+                        // PUBLIC
+                        .requestMatchers(
+                                "/api/auth/**",
+                                "/test.html",
+                                "/quiz.html",
+                                "/css/**",
+                                "/js/**",
+                                "/images/**",
+                                "/ws/**", "/ws", "/ws/info", "/ws/websocket"
+                        ).permitAll()
+
+                        // ADMIN
+                        .requestMatchers("/api/admin/**").hasRole("ADMIN")
+
+                        // USER
+                        .requestMatchers("/api/user/**").hasRole("USER")
+
+                        // WEBSOCKET
+                        .requestMatchers("/ws-quiz/**").permitAll()
+
+                        // DÄ°ÄERÄ°
+                        .anyRequest().authenticated()
+                )
+
+                .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
+
+        return http.build();
+    }
+
+    @Bean
+    public org.springframework.web.cors.CorsConfigurationSource corsConfigurationSource() {
+
+        org.springframework.web.cors.CorsConfiguration config =
+                new org.springframework.web.cors.CorsConfiguration();
+
+        // DEV iÃ§in aÃ§Ä±k
+        config.setAllowedOriginPatterns(java.util.List.of("*"));
+
+        config.setAllowedMethods(java.util.List.of(
+                "GET", "POST", "PUT", "DELETE", "OPTIONS"
+        ));
+
+        config.setAllowedHeaders(java.util.List.of("*"));
+
+        config.setAllowCredentials(true);
+
+        org.springframework.web.cors.UrlBasedCorsConfigurationSource source =
+                new org.springframework.web.cors.UrlBasedCorsConfigurationSource();
+
+        source.registerCorsConfiguration("/**", config);
+
+        return source;
+    }
+}
+=== WebSocketConfig.java ===
+package com.murdergame.common.config;
+
+import com.murdergame.security.JwtService;
+import com.murdergame.security.WebSocketAuthInterceptor;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.messaging.simp.config.ChannelRegistration;
+import org.springframework.messaging.simp.config.MessageBrokerRegistry;
+import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBroker;
+import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
+import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerConfigurer;
+import lombok.RequiredArgsConstructor;
+
+@Configuration
+@EnableWebSocketMessageBroker
+@RequiredArgsConstructor
+public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
+
+    private final JwtService jwtService;
+
+    @Override
+    public void configureMessageBroker(MessageBrokerRegistry config) {
+        config.enableSimpleBroker("/topic", "/queue");
+        config.setApplicationDestinationPrefixes("/app");
+    }
+
+    @Override
+    public void registerStompEndpoints(StompEndpointRegistry registry) {
+        registry.addEndpoint("/ws").setAllowedOriginPatterns("*").withSockJS();
+    }
+
+    @Override
+    public void configureClientInboundChannel(ChannelRegistration registration) {
+        registration.interceptors(new WebSocketAuthInterceptor(jwtService));
+    }
+}
+=== BusinessException.java ===
+package com.murdergame.common.exception;
+
+public class BusinessException extends RuntimeException {
+    public BusinessException(String message) {
+        super(message);
+    }
+
+    public BusinessException(String message, Throwable cause) {
+        super(message, cause);
+    }
+}
+=== GlobalExceptionHandler.java ===
+package com.murdergame.common.exception;
+
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.WebRequest;
+import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
+
+import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+@Slf4j
+@RestControllerAdvice
+public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
+
+    // ============ CUSTOM EXCEPTIONS ============
+
+    @ExceptionHandler(ResourceNotFoundException.class)
+    public ResponseEntity<?> handleResourceNotFoundException(
+            ResourceNotFoundException ex,
+            WebRequest request) {
+
+        log.warn("Resource not found: {}", ex.getMessage());
+
+        return ResponseEntity
+                .status(HttpStatus.NOT_FOUND)
+                .body(buildErrorResponse(
+                        HttpStatus.NOT_FOUND,
+                        ex.getMessage(),
+                        request.getDescription(false)
+                ));
+    }
+
+    @ExceptionHandler(InvalidCredentialsException.class)
+    public ResponseEntity<?> handleInvalidCredentialsException(
+            InvalidCredentialsException ex,
+            WebRequest request) {
+
+        log.warn("Invalid credentials: {}", ex.getMessage());
+
+        return ResponseEntity
+                .status(HttpStatus.UNAUTHORIZED)
+                .body(buildErrorResponse(
+                        HttpStatus.UNAUTHORIZED,
+                        ex.getMessage(),
+                        request.getDescription(false)
+                ));
+    }
+
+    @ExceptionHandler(ValidationException.class)
+    public ResponseEntity<?> handleValidationException(
+            ValidationException ex,
+            WebRequest request) {
+
+        log.warn("Validation error: {}", ex.getMessage());
+
+        return ResponseEntity
+                .status(HttpStatus.BAD_REQUEST)
+                .body(buildErrorResponse(
+                        HttpStatus.BAD_REQUEST,
+                        ex.getMessage(),
+                        request.getDescription(false)
+                ));
+    }
+
+    @ExceptionHandler(BusinessException.class)
+    public ResponseEntity<?> handleBusinessException(
+            BusinessException ex,
+            WebRequest request) {
+
+        log.error("Business exception: {}", ex.getMessage(), ex);
+
+        return ResponseEntity
+                .status(HttpStatus.BAD_REQUEST)
+                .body(buildErrorResponse(
+                        HttpStatus.BAD_REQUEST,
+                        ex.getMessage(),
+                        request.getDescription(false)
+                ));
+    }
+
+    // ============ SPRING EXCEPTIONS ============
+
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<?> handleAccessDeniedException(
+            AccessDeniedException ex,
+            WebRequest request) {
+
+        log.warn("Access denied: {}", ex.getMessage());
+
+        return ResponseEntity
+                .status(HttpStatus.FORBIDDEN)
+                .body(buildErrorResponse(
+                        HttpStatus.FORBIDDEN,
+                        "Bu iÅŸleme yetkisi yok",
+                        request.getDescription(false)
+                ));
+    }
+
+    // ============ RUNTIME EXCEPTION (Fallback) ============
+
+    @ExceptionHandler(RuntimeException.class)
+    public ResponseEntity<?> handleRuntimeException(
+            RuntimeException ex,
+            WebRequest request) {
+
+        log.error("Runtime exception occurred", ex);
+
+        return ResponseEntity
+                .status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(buildErrorResponse(
+                        HttpStatus.INTERNAL_SERVER_ERROR,
+                        ex.getMessage() != null ? ex.getMessage() : "Ä°Ã§ sunucu hatasÄ±",
+                        request.getDescription(false)
+                ));
+    }
+
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<?> handleGenericException(
+            Exception ex,
+            WebRequest request) {
+
+        log.error("Generic exception occurred", ex);
+
+        return ResponseEntity
+                .status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(buildErrorResponse(
+                        HttpStatus.INTERNAL_SERVER_ERROR,
+                        "Bir hata oluÅŸtu",
+                        request.getDescription(false)
+                ));
+    }
+
+    // ============ ERROR RESPONSE BUILDER ============
+
+    private Map<String, Object> buildErrorResponse(
+            HttpStatus status,
+            String message,
+            String path) {
+
+        Map<String, Object> errorResponse = new LinkedHashMap<>();
+        errorResponse.put("timestamp", LocalDateTime.now());
+        errorResponse.put("status", status.value());
+        errorResponse.put("error", status.getReasonPhrase());
+        errorResponse.put("message", message);
+        errorResponse.put("path", path.replace("uri=", ""));
+
+        return errorResponse;
+    }
+}
+=== InvalidCredentialsException.java ===
+package com.murdergame.common.exception;
+
+public class InvalidCredentialsException extends RuntimeException {
+    public InvalidCredentialsException(String message) {
+        super(message);
+    }
+
+    public InvalidCredentialsException(String message, Throwable cause) {
+        super(message, cause);
+    }
+}
+=== ResourceNotFoundException.java ===
+package com.murdergame.common.exception;
+
+public class ResourceNotFoundException extends RuntimeException {
+    public ResourceNotFoundException(String message) {
+        super(message);
+    }
+
+    public ResourceNotFoundException(String message, Throwable cause) {
+        super(message, cause);
+    }
+}
+=== ValidationException.java ===
+package com.murdergame.common.exception;
+
+public class ValidationException extends RuntimeException {
+    public ValidationException(String message) {
+        super(message);
+    }
+
+    public ValidationException(String message, Throwable cause) {
+        super(message, cause);
+    }
+}
+=== GameRoomController.java ===
+package com.murdergame.game.controller;
+
+import com.murdergame.game.dto.AddTeamsToGameRoomRequest;
+import com.murdergame.game.dto.GameRoomResponse;
+import com.murdergame.game.dto.UpdateGameRoomStateRequest;
+import com.murdergame.game.entity.GameRoom;
+import com.murdergame.game.service.GameRoomService;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+
+@RestController
+@RequestMapping("/api/game-room")
+@RequiredArgsConstructor
+public class GameRoomController {
+
+    private final GameRoomService gameRoomService;
+
+    @PostMapping("/create")
+    @PreAuthorize("hasRole('ADMIN')")
+    @ResponseStatus(HttpStatus.CREATED)
+    public GameRoom createGameRoom() {
+        return gameRoomService.createGameRoom();
+    }
+
+    @GetMapping("/{roomId}")
+    @PreAuthorize("hasRole('ADMIN')")
+    public GameRoom getGameRoom(@PathVariable Long roomId) {
+        return gameRoomService.getGameRoom(roomId);
+    }
+
+    @GetMapping("/admin/all")
+    @PreAuthorize("hasRole('ADMIN')")
+    public List<GameRoomResponse> getAllGameRooms() {
+        return gameRoomService.getAllGameRooms();
+    }
+
+    @PutMapping("/{roomId}/state")
+    @PreAuthorize("hasRole('ADMIN')")
+    public GameRoom updateGameRoomState(
+            @PathVariable Long roomId,
+            @RequestBody UpdateGameRoomStateRequest request) {
+        return gameRoomService.updateGameRoomState(roomId, request.state());
+    }
+
+    // âŒ BU KALDIR (tek tek ekleme)
+    // @PostMapping("/{roomId}/add-team/{teamId}")
+    // public void addTeamToGameRoom(@PathVariable Long roomId, @PathVariable Long teamId) {
+    //     gameRoomService.addTeamToGameRoom(roomId, teamId);
+    // }
+
+    // âœ… BULK EKLE (tÃ¼m takÄ±mlarÄ± birden)
+    @PostMapping("/{roomId}/add-teams")
+    @PreAuthorize("hasRole('ADMIN')")
+    @ResponseStatus(HttpStatus.OK)
+    public void addTeamsToGameRoom(
+            @PathVariable Long roomId,
+            @RequestBody AddTeamsToGameRoomRequest request) {
+        gameRoomService.addTeamsToGameRoom(roomId, request.teamIds());
+    }
+
+    @PostMapping("/{roomId}/remove-team/{teamId}")
+    @PreAuthorize("hasRole('ADMIN')")
+    public void removeTeamFromGameRoom(@PathVariable Long roomId, @PathVariable Long teamId) {
+        gameRoomService.removeTeamFromGameRoom(roomId, teamId);
+    }
+}
+=== AddTeamsToGameRoomRequest.java ===
+package com.murdergame.game.dto;
+
+import java.util.List;
+
+public record AddTeamsToGameRoomRequest(
+        List<Long> teamIds
+) {}
+=== GameRoomResponse.java ===
+package com.murdergame.game.dto;
+
+import com.murdergame.game.entity.GameRoomState;
+import java.time.LocalDateTime;
+
+public record GameRoomResponse(
+        Long id,
+        GameRoomState state,
+        Integer teamCount,
+        LocalDateTime createdAt,
+        LocalDateTime startedAt,
+        LocalDateTime endedAt
+) {}
+=== UpdateGameRoomStateRequest.java ===
+package com.murdergame.game.dto;
+
+import com.murdergame.game.entity.GameRoomState;
+
+public record UpdateGameRoomStateRequest(
+        GameRoomState state
+) {}
+=== GameRoom.java ===
+package com.murdergame.game.entity;
+
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.murdergame.team.entity.Team;
+import jakarta.persistence.*;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.time.LocalDateTime;
+import java.util.List;
+
+@Entity
+@Table(name = "game_rooms")
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public class GameRoom {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    @Builder.Default
+    private GameRoomState state = GameRoomState.WAITING;
+
+    @JsonIgnore
+    @OneToMany(mappedBy = "gameRoom", cascade = CascadeType.ALL)
+    private List<Team> teams;
+
+    @Column(nullable = false, updatable = false)
+    @Builder.Default
+    private LocalDateTime createdAt = LocalDateTime.now();
+
+    private LocalDateTime startedAt;
+    private LocalDateTime endedAt;
+
+    @Builder.Default
+    private Boolean active = true;
+
+    private Long currentQuestionId;
+    private Integer currentQuestionIndex;
+    private LocalDateTime questionStartedAt;
+}
+=== GameRoomState.java ===
+package com.murdergame.game.entity;
+
+public enum GameRoomState {
+    WAITING,           // Bekleme (takÄ±mlar hazÄ±rlanÄ±yor)
+    QUIZ1,             // Quiz 1 devam ediyor
+    QUIZ1_ENDED,       // Quiz 1 bitti
+    QUIZ2,             // Quiz 2 devam ediyor
+    QUIZ2_ENDED,       // Quiz 2 bitti
+    CLUEGAME,          // ClueGame devam ediyor (30 dakika)
+    CLUEGAME_FINAL,    // Final cevap zamanÄ±
+    CLUEGAME_ENDED,    // ClueGame bitti
+    ENDED              // Oyun tamamen bitti
+}
+=== GameRoomRepository.java ===
+package com.murdergame.game.repository;
+
+import com.murdergame.game.entity.GameRoom;
+import com.murdergame.game.entity.GameRoomState;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.stereotype.Repository;
+
+import java.util.List;
+import java.util.Optional;
+
+@Repository
+public interface GameRoomRepository extends JpaRepository<GameRoom, Long> {
+    Optional<GameRoom> findByIdAndActiveTrue(Long id);
+    List<GameRoom> findByStateAndActiveTrue(GameRoomState state);
+    List<GameRoom> findByActiveTrue();
+}
+=== GameRoomService.java ===
+package com.murdergame.game.service;
+
+import com.murdergame.game.dto.GameRoomResponse;
+import com.murdergame.game.entity.GameRoom;
+import com.murdergame.game.entity.GameRoomState;
+
+import java.util.List;
+
+public interface GameRoomService {
+    GameRoom createGameRoom();
+    GameRoom getGameRoom(Long roomId);
+    GameRoom updateGameRoomState(Long roomId, GameRoomState newState);
+    List<GameRoomResponse> getAllGameRooms();
+    void addTeamToGameRoom(Long roomId, Long teamId);
+    void removeTeamFromGameRoom(Long roomId, Long teamId);
+
+    // âœ… YENÄ°
+    void addTeamsToGameRoom(Long roomId, List<Long> teamIds);
+}
+=== GameRoomServiceImpl.java ===
+package com.murdergame.game.service.impl;
+
+import com.murdergame.common.exception.ValidationException;
+import com.murdergame.game.dto.GameRoomResponse;
+import com.murdergame.game.entity.GameRoom;
+import com.murdergame.game.entity.GameRoomState;
+import com.murdergame.game.repository.GameRoomRepository;
+import com.murdergame.game.service.GameRoomService;
+import com.murdergame.team.entity.Team;
+import com.murdergame.team.repository.TeamRepository;
+import com.murdergame.common.exception.ResourceNotFoundException;
+import lombok.RequiredArgsConstructor;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.LocalDateTime;
+import java.util.List;
+
+@Service
+@RequiredArgsConstructor
+@Transactional
+public class GameRoomServiceImpl implements GameRoomService {
+
+    private final GameRoomRepository gameRoomRepository;
+    private final TeamRepository teamRepository;
+    private final SimpMessagingTemplate messagingTemplate;
+
+    @Override
+    public GameRoom createGameRoom() {
+        GameRoom gameRoom = GameRoom.builder()
+                .state(GameRoomState.WAITING)
+                .active(true)
+                .build();
+        return gameRoomRepository.save(gameRoom);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public GameRoom getGameRoom(Long roomId) {
+        return gameRoomRepository.findByIdAndActiveTrue(roomId)
+                .orElseThrow(() -> new ResourceNotFoundException("Oda bulunamadÄ±"));
+    }
+
+    @Override
+    public GameRoom updateGameRoomState(Long roomId, GameRoomState newState) {
+        GameRoom gameRoom = getGameRoom(roomId);
+        gameRoom.setState(newState);
+
+        // EÄŸer ENDED durumuna geÃ§iyorsa, endedAt'Ä± set et
+        if (newState == GameRoomState.ENDED) {
+            gameRoom.setEndedAt(LocalDateTime.now());
+        }
+        if (newState == GameRoomState.QUIZ1 || newState == GameRoomState.QUIZ2
+                || newState == GameRoomState.CLUEGAME) {
+            gameRoom.setStartedAt(LocalDateTime.now());
+        }
+
+        GameRoom saved = gameRoomRepository.save(gameRoom);
+
+        // âœ… YENÄ° â€” state deÄŸiÅŸimini broadcast et
+        messagingTemplate.convertAndSend(
+                "/topic/room/" + roomId + "/state",
+                saved.getState().name()   // "QUIZ1", "QUIZ2" vs string olarak gider
+        );
+
+        return saved;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<GameRoomResponse> getAllGameRooms() {
+        return gameRoomRepository.findByActiveTrue()
+                .stream()
+                .map(this::toResponse)
+                .toList();
+    }
+
+    @Override
+    public void addTeamToGameRoom(Long roomId, Long teamId) {
+        GameRoom gameRoom = getGameRoom(roomId);
+        Team team = teamRepository.findById(teamId)
+                .orElseThrow(() -> new ResourceNotFoundException("TakÄ±m bulunamadÄ±"));
+
+        team.setGameRoom(gameRoom);
+        teamRepository.save(team);
+    }
+
+    @Override
+    public void removeTeamFromGameRoom(Long roomId, Long teamId) {
+        GameRoom gameRoom = getGameRoom(roomId);
+        Team team = teamRepository.findById(teamId)
+                .orElseThrow(() -> new ResourceNotFoundException("TakÄ±m bulunamadÄ±"));
+
+        if (!team.getGameRoom().getId().equals(roomId)) {
+            throw new ResourceNotFoundException("TakÄ±m bu odada deÄŸil");
+        }
+
+        team.setGameRoom(null);
+        teamRepository.save(team);
+    }
+
+    @Override
+    public void addTeamsToGameRoom(Long roomId, List<Long> teamIds) {
+        GameRoom gameRoom = getGameRoom(roomId);
+
+        if (teamIds == null || teamIds.isEmpty()) {
+            throw new ValidationException("TakÄ±m listesi boÅŸ olamaz");
+        }
+
+        List<Team> teams = teamRepository.findAllById(teamIds);
+
+        if (teams.size() != teamIds.size()) {
+            throw new ResourceNotFoundException("BazÄ± takÄ±mlar bulunamadÄ±");
+        }
+
+        // TÃ¼m takÄ±mlarÄ± odaya ekle
+        teams.forEach(team -> team.setGameRoom(gameRoom));
+        teamRepository.saveAll(teams);
+    }
+
+    private GameRoomResponse toResponse(GameRoom gameRoom) {
+        return new GameRoomResponse(
+                gameRoom.getId(),
+                gameRoom.getState(),
+                gameRoom.getTeams().size(),
+                gameRoom.getCreatedAt(),
+                gameRoom.getStartedAt(),
+                gameRoom.getEndedAt()
+        );
+    }
+}
+=== LeaderboardController.java ===
+package com.murdergame.leaderboard.controller;
+
+import com.murdergame.leaderboard.service.LeaderboardService;
+import com.murdergame.leaderboard.dto.LeaderboardResponse;
+import lombok.RequiredArgsConstructor;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+import java.util.List;
+
+@RestController
+@RequestMapping("/api/leaderboard")
+@RequiredArgsConstructor
+public class LeaderboardController {
+
+    private final LeaderboardService leaderboardService;
+
+    // TÃœM TAKIMLARIN PUANLARINI GÃ–STER
+    @GetMapping
+    public List<LeaderboardResponse> getLeaderboard() {
+        return leaderboardService.getLeaderboard();
+    }
+
+    // BELÄ°RLÄ° BÄ°R TAKIMIN PUANINI GÃ–STER
+    @GetMapping("/{teamId}")
+    public LeaderboardResponse getTeamScore(@PathVariable Long teamId) {
+        return leaderboardService.getTeamScore(teamId);
+    }
+}
+=== LeaderboardResponse.java ===
+package com.murdergame.leaderboard.dto;
+
+public record LeaderboardResponse(
+        Long teamId,
+        String teamName,
+        Integer totalScore
+) {}
+=== LeaderboardService.java ===
+package com.murdergame.leaderboard.service;
+
+import com.murdergame.leaderboard.dto.LeaderboardResponse;
+import java.util.List;
+
+public interface LeaderboardService {
+    List<LeaderboardResponse> getLeaderboard();
+    LeaderboardResponse getTeamScore(Long teamId);
+}
+=== LeaderboardServiceImpl.java ===
+package com.murdergame.leaderboard.service.impl;
+
+import com.murdergame.cluegame.repository.ClueGameGuessRepository;
+import com.murdergame.leaderboard.service.LeaderboardService;
+import com.murdergame.leaderboard.dto.LeaderboardResponse;
+import com.murdergame.quiz.repository.QuizAnswerRepository;
+import com.murdergame.team.repository.TeamRepository;
+import com.murdergame.team.entity.Team;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import java.util.List;
+import java.util.stream.Collectors;
+
+@Service  // â† BUNU EKLE!
+@RequiredArgsConstructor
+@Transactional(readOnly = true)
+public class LeaderboardServiceImpl implements LeaderboardService {
+
+    private final TeamRepository teamRepository;
+    private final QuizAnswerRepository quizAnswerRepository;
+    private final ClueGameGuessRepository clueGameGuessRepository;
+
+    @Override
+    public List<LeaderboardResponse> getLeaderboard() {
+        return teamRepository.findAll()
+                .stream()
+                .map(this::getTeamScoreFromTeam)
+                .sorted((a, b) -> Integer.compare(b.totalScore(), a.totalScore()))
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    public LeaderboardResponse getTeamScore(Long teamId) {
+        Team team = teamRepository.findById(teamId)
+                .orElseThrow(() -> new RuntimeException("TakÄ±m bulunamadÄ±: " + teamId));
+        return getTeamScoreFromTeam(team);
+    }
+
+    private LeaderboardResponse getTeamScoreFromTeam(Team team) {
+        int quizScore = quizAnswerRepository.findByTeamId(team.getId())
+                .stream()
+                .mapToInt(a -> a.getPointsEarned() != null ? a.getPointsEarned() : 0)
+                .sum();
+
+        int clueScore = clueGameGuessRepository.findByTeamId(team.getId())
+                .stream()
+                .mapToInt(g -> g.getPointsEarned() != null ? g.getPointsEarned() : 0)
+                .sum();
+
+        return new LeaderboardResponse(
+                team.getId(),
+                team.getTeamNo(),
+                quizScore + clueScore
+        );
+    }
+}
+=== QuizController.java ===
+package com.murdergame.quiz.controller;
+
+import com.murdergame.quiz.dto.CreateQuestionRequest;
+import com.murdergame.quiz.dto.QuestionResponse;
+import com.murdergame.quiz.dto.SubmitAnswerRequest;
+import com.murdergame.quiz.dto.SubmitAnswerResponse;
+import com.murdergame.quiz.entity.QuizAnswer;
+import com.murdergame.quiz.service.QuizService;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.*;
+
+import java.net.URI;
+import java.util.List;
+
+@RestController
+@RequestMapping("/api/quiz")
+@RequiredArgsConstructor
+public class QuizController {
+
+    private final QuizService quizService;
+
+    // User: Oda'daki sorularÄ± getir
+    @GetMapping("/room/{gameRoomId}/questions")
+   // @PreAuthorize("hasRole('USER')")
+    public List<QuestionResponse> getQuestionsByGameRoom(@PathVariable Long gameRoomId) {
+        return quizService.getQuestionsByGameRoom(gameRoomId);
+    }
+
+    // User: Specific soru getir
+    @GetMapping("/question/{questionId}")
+    //@PreAuthorize("hasRole('USER')")
+    public QuestionResponse getQuestionById(@PathVariable Long questionId) {
+        return quizService.getQuestionById(questionId);
+    }
+
+    @PostMapping("/room/{gameRoomId}/questions")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<QuestionResponse> createQuestion(
+            @PathVariable Long gameRoomId,
+            @RequestBody CreateQuestionRequest request) {
+        QuestionResponse response = quizService.createQuestion(gameRoomId, request);
+        URI location = URI.create("/api/quiz/question/" + response.id());
+        return ResponseEntity.created(location).body(response);
+    }
+
+    @PostMapping("/room/{gameRoomId}/questions/multiple")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<List<QuestionResponse>> createMultipleQuestions(
+            @PathVariable Long gameRoomId,
+            @RequestBody List<CreateQuestionRequest> requests) {
+        List<QuestionResponse> responses = quizService.createMultipleQuestions(gameRoomId, requests);
+        return ResponseEntity.ok(responses);
+    }
+
+    // User: Cevap gÃ¶nder
+//    @PostMapping("/room/{gameRoomId}/submit")
+//    @PreAuthorize("hasRole('USER')")
+//    public SubmitAnswerResponse submitAnswer(
+//            @PathVariable Long gameRoomId,
+//            @RequestParam Long teamId,
+//            @RequestBody SubmitAnswerRequest request) {
+//        return quizService.submitAnswer(gameRoomId, teamId, request);
+//    }
+
+    // Admin: Oda'daki tÃ¼m cevaplarÄ± getir
+    @GetMapping("/room/{gameRoomId}/answers")
+    @PreAuthorize("hasRole('ADMIN')")
+    public List<QuizAnswer> getGameRoomAnswers(@PathVariable Long gameRoomId) {
+        return quizService.getGameRoomAnswers(gameRoomId);
+    }
+
+    @DeleteMapping("/questions/{questionId}")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<String> deleteQuestion(
+            @PathVariable Long questionId) {
+
+        quizService.deleteQuestion(questionId);
+
+        return ResponseEntity.ok("Soru silindi.");
+    }
+
+    // Admin: TakÄ±mÄ±n cevaplarÄ±nÄ± getir
+    @GetMapping("/room/{gameRoomId}/team/{teamId}/answers")
+    @PreAuthorize("hasRole('ADMIN')")
+    public List<QuizAnswer> getTeamAnswers(
+            @PathVariable Long gameRoomId,
+            @PathVariable Long teamId) {
+        return quizService.getTeamAnswers(gameRoomId, teamId);
+    }
+}
+=== QuizWebSocketController.java ===
+package com.murdergame.quiz.controller;
+
+import com.murdergame.quiz.dto.SubmitAnswerWSRequest;
+import com.murdergame.quiz.service.QuizWebSocketService;
+import com.murdergame.quiz.service.impl.QuizWebSocketServiceImpl;
+import lombok.RequiredArgsConstructor;
+import org.springframework.messaging.handler.annotation.DestinationVariable;
+import org.springframework.messaging.handler.annotation.MessageMapping;
+import org.springframework.messaging.handler.annotation.Payload;
+import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
+import org.springframework.stereotype.Controller;
+
+@Controller
+@RequiredArgsConstructor
+public class QuizWebSocketController {
+
+    private final QuizWebSocketService quizWebSocketService;
+
+    // Admin sonraki soruya geÃ§er
+    @MessageMapping("/quiz/{roomId}/next-question")
+    public void nextQuestion(
+            @DestinationVariable Long roomId,
+            SimpMessageHeaderAccessor headerAccessor) {
+
+        // âœ… YENÄ° â€” role kontrolÃ¼
+        System.out.println("=== nextQuestion CALLED roomId: " + roomId + " ===");
+        String role = (String) headerAccessor.getSessionAttributes().get("role");
+        System.out.println("role: " + role);
+        if (!"ADMIN".equals(role)) {
+            // Sessizce dÃ¶n, hata fÄ±rlatma â€” frontend'i bozar
+            return;
+        }
+        System.out.println("=== nextQuestion CALLED roomId: " + roomId + " ===");
+
+        Long adminId = (Long) headerAccessor.getSessionAttributes().get("userId");
+        quizWebSocketService.broadcastNextQuestion(roomId, adminId);
+    }
+
+    // Admin soruyu bitirir (sÃ¼re dolunca veya manuel)
+    @MessageMapping("/quiz/{roomId}/end-question")
+    public void endQuestion(
+            @DestinationVariable Long roomId,
+            SimpMessageHeaderAccessor headerAccessor) {
+
+        // âœ… YENÄ° â€” role kontrolÃ¼
+        String role = (String) headerAccessor.getSessionAttributes().get("role");
+        if (!"ADMIN".equals(role)) {
+            return;
+        }
+
+        quizWebSocketService.endCurrentQuestion(roomId);
+    }
+
+    // KullanÄ±cÄ± cevap gÃ¶nderir
+    @MessageMapping("/quiz/{roomId}/answer")
+    public void submitAnswer(
+            @DestinationVariable Long roomId,
+            @Payload SubmitAnswerWSRequest request,
+            SimpMessageHeaderAccessor headerAccessor) {
+
+        Long userId = (Long) headerAccessor.getSessionAttributes().get("userId");
+        quizWebSocketService.submitAnswer(roomId, userId, request);
+    }
+}
+
+=== CreateQuestionRequest.java ===
+package com.murdergame.quiz.dto;
+
+public record CreateQuestionRequest(
+        String questionText,
+        String optionA,
+        String optionB,
+        String optionC,
+        String optionD,
+        String correctAnswer, // A, B, C, D
+        Integer points
+) {}
+=== QuestionBroadcastDTO.java ===
+package com.murdergame.quiz.dto;
+
+public record QuestionBroadcastDTO(
+        Long questionId,
+        Integer questionIndex,
+        String questionText,
+        String optionA,
+        String optionB,
+        String optionC,
+        String optionD,
+        Integer points,
+        Integer durationSeconds  // frontend timer iÃ§in
+) {}
+=== QuestionResponse.java ===
+package com.murdergame.quiz.dto;
+
+public record QuestionResponse(
+        Long id,
+        String optionA,
+        String optionB,
+        String optionC,
+        String optionD,
+        String question,
+        Integer points
+) {}
+=== SubmitAnswerRequest.java ===
+package com.murdergame.quiz.dto;
+
+public record SubmitAnswerRequest(
+        Long questionId,
+        String answer
+) {}
+=== SubmitAnswerResponse.java ===
+package com.murdergame.quiz.dto;
+
+public record SubmitAnswerResponse(
+        Long answerId,
+        Long questionId,
+        Boolean isCorrect,
+        Integer pointsEarned,
+        String message
+) {}
+=== SubmitAnswerWSRequest.java ===
+package com.murdergame.quiz.dto;
+
+public record SubmitAnswerWSRequest(
+        Long questionId,
+        String selectedAnswer,  // "A", "B", "C", "D"
+        Integer betAmount
+) {}
+=== Question.java ===
+package com.murdergame.quiz.entity;
+
+import com.murdergame.game.entity.GameRoom;
+import jakarta.persistence.*;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+@Entity
+@Table(name = "questions")
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public class Question {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(nullable = false)
+    private String question;
+
+    @Column(nullable = false)
+    private String optionA;
+
+    @Column(nullable = false)
+    private String optionB;
+
+    @Column(nullable = false)
+    private String optionC;
+
+    @Column(nullable = false)
+    private String optionD;
+
+    @Column(nullable = false)
+    private String correctAnswer; // A, B, C, D
+
+    @Column(nullable = false)
+    private Integer points;
+
+    @Column(nullable = false)
+    @Builder.Default
+    private Boolean active = true;
+
+    @ManyToOne
+    @JoinColumn(name = "game_room_id")
+    private GameRoom gameRoom;
+}
+=== QuizAnswer.java ===
+package com.murdergame.quiz.entity;
+
+import com.murdergame.game.entity.GameRoom;
+import com.murdergame.team.entity.Team;
+import jakarta.persistence.*;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.time.LocalDateTime;
+
+@Entity
+@Table(name = "quiz_answers")
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public class QuizAnswer {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    // âœ… YENÄ° - GameRoom relation
+    @ManyToOne
+    @JoinColumn(name = "game_room_id", nullable = false)
+    private GameRoom gameRoom;
+
+    @ManyToOne
+    @JoinColumn(name = "team_id", nullable = false)
+    private Team team;
+
+    @ManyToOne
+    @JoinColumn(name = "question_id", nullable = false)
+    private Question question;
+
+    @Column(nullable = false)
+    private String teamAnswer;
+
+    @Column(nullable = false)
+    @Builder.Default
+    private Boolean isCorrect = false;
+
+    @Column(nullable = false)
+    @Builder.Default
+    private Integer pointsEarned = 0;
+
+    @Column(nullable = false, updatable = false)
+    @Builder.Default
+    private LocalDateTime answeredAt = LocalDateTime.now();
+
+    @Column
+    @Builder.Default
+    private Integer betAmount = 0;
+}
+=== QuestionRepository.java ===
+package com.murdergame.quiz.repository;
+
+import com.murdergame.quiz.entity.Question;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.stereotype.Repository;
+
+import java.util.List;
+import java.util.Optional;
+
+@Repository
+public interface QuestionRepository extends JpaRepository<Question, Long> {
+    // âœ… YENÄ° - GameRoom bazlÄ± sorgu
+    List<Question> findByGameRoomId(Long gameRoomId);
+
+    List<Question> findByActiveTrue();
+    Optional<Question> findByIdAndActiveTrue(Long id);
+
+    List<Question> findByGameRoomIdOrderByIdAsc(Long gameRoomId);
+}
+=== QuizAnswerRepository.java ===
+package com.murdergame.quiz.repository;
+
+import com.murdergame.quiz.entity.Question;
+import com.murdergame.quiz.entity.QuizAnswer;
+import com.murdergame.team.entity.Team;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.stereotype.Repository;
+
+import java.util.List;
+
+@Repository
+public interface QuizAnswerRepository extends JpaRepository<QuizAnswer, Long> {
+    // âœ… YENÄ° - GameRoom bazlÄ± sorgu
+    List<QuizAnswer> findByGameRoomId(Long gameRoomId);
+    List<QuizAnswer> findByGameRoomIdAndTeamId(Long gameRoomId, Long teamId);
+
+    // Eski
+    List<QuizAnswer> findByTeamId(Long teamId);
+
+    boolean existsByTeamAndQuestion(Team team, Question question);
+
+    void deleteByTeamId(Long teamId);
+}
+=== QuizService.java ===
+package com.murdergame.quiz.service;
+
+import com.murdergame.quiz.dto.CreateQuestionRequest;
+import com.murdergame.quiz.dto.QuestionResponse;
+import com.murdergame.quiz.dto.SubmitAnswerRequest;
+import com.murdergame.quiz.dto.SubmitAnswerResponse;
+import com.murdergame.quiz.entity.QuizAnswer;
+
+import java.util.List;
+
+public interface QuizService {
+    // Question'larÄ± GameRoom'a gÃ¶re getir
+    List<QuestionResponse> getQuestionsByGameRoom(Long gameRoomId);
+
+    // Specific question'Ä± getir
+    QuestionResponse getQuestionById(Long questionId);
+
+    // Question oluÅŸtur (Admin)
+    QuestionResponse createQuestion(Long gameRoomId, CreateQuestionRequest request);
+
+    // TakÄ±mÄ±n cevabÄ±nÄ± kaydet
+    SubmitAnswerResponse submitAnswer(Long gameRoomId, Long teamId, SubmitAnswerRequest request);
+
+    // GameRoom'daki tÃ¼m cevaplarÄ± getir (leaderboard iÃ§in)
+    List<QuizAnswer> getGameRoomAnswers(Long gameRoomId);
+
+    // TakÄ±mÄ±n cevaplarÄ±nÄ± getir
+    List<QuizAnswer> getTeamAnswers(Long gameRoomId, Long teamId);
+
+    void deleteQuestion(Long questionId);
+
+    List<QuestionResponse> createMultipleQuestions(Long gameRoomId, List<CreateQuestionRequest> requests);
+}
+=== QuizWebSocketService.java ===
+package com.murdergame.quiz.service;
+
+import com.murdergame.quiz.dto.SubmitAnswerWSRequest;
+
+public interface QuizWebSocketService {
+
+    void broadcastNextQuestion(Long roomId, Long adminId);
+
+    void submitAnswer(Long roomId, Long userId, SubmitAnswerWSRequest request);
+
+    void endCurrentQuestion(Long roomId);
+}
+=== QuizServiceImpl.java ===
+package com.murdergame.quiz.service.impl;
+
+import com.murdergame.game.repository.GameRoomRepository;
+import com.murdergame.quiz.dto.CreateQuestionRequest;
+import com.murdergame.quiz.dto.QuestionResponse;
+import com.murdergame.quiz.dto.SubmitAnswerRequest;
+import com.murdergame.quiz.dto.SubmitAnswerResponse;
+import com.murdergame.quiz.entity.Question;
+import com.murdergame.quiz.entity.QuizAnswer;
+import com.murdergame.quiz.repository.QuestionRepository;
+import com.murdergame.quiz.repository.QuizAnswerRepository;
+import com.murdergame.quiz.service.QuizService;
+import com.murdergame.game.service.GameRoomService;
+import com.murdergame.game.entity.GameRoom;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.bind.annotation.RequestParam;
+
+import java.util.List;
+
+@Service
+@RequiredArgsConstructor
+@Transactional
+public class QuizServiceImpl implements QuizService {
+
+    private final QuestionRepository questionRepository;
+    private final QuizAnswerRepository quizAnswerRepository;
+    private final GameRoomRepository gameRoomRepository;
+
+    @Override
+    public List<QuestionResponse> getQuestionsByGameRoom(Long gameRoomId) {
+        return questionRepository.findByGameRoomId(gameRoomId)
+                .stream()
+                .map(this::mapToQuestionResponse)
+                .toList();
+    }
+
+    @Override
+    public QuestionResponse getQuestionById(Long questionId) {
+        Question question = questionRepository.findById(questionId)
+                .orElseThrow(() -> new RuntimeException("Soru bulunamadÄ±: " + questionId));
+        return mapToQuestionResponse(question);
+    }
+
+    @Override
+    public QuestionResponse createQuestion(Long gameRoomId, CreateQuestionRequest request) {
+        // GameRoom'un varlÄ±ÄŸÄ±nÄ± kontrol et
+        GameRoom gameRoom = gameRoomRepository.findById(gameRoomId)
+                .orElseThrow(() -> new RuntimeException("GameRoom bulunamadÄ±: " + gameRoomId));
+
+        // Yeni Question entity oluÅŸtur - Builder pattern kullan
+        Question question = Question.builder()
+                .question(request.questionText())
+                .optionA(request.optionA())
+                .optionB(request.optionB())
+                .optionC(request.optionC())
+                .optionD(request.optionD())
+                .correctAnswer(request.correctAnswer())
+                .points(request.points())
+                .gameRoom(gameRoom)
+                .active(true)
+                .build();
+
+        // VeritabanÄ±na kaydet
+        Question savedQuestion = questionRepository.save(question);
+
+        return mapToQuestionResponse(savedQuestion);
+    }
+
+    public List<QuestionResponse> createMultipleQuestions(Long gameRoomId, List<CreateQuestionRequest> requests) {
+        return requests.stream()
+                .map(request -> createQuestion(gameRoomId, request))
+                .toList();
+    }
+
+    @Override
+    public SubmitAnswerResponse submitAnswer(Long gameRoomId, @RequestParam Long teamId, SubmitAnswerRequest request) {
+        // Ä°mplementasyon burada
+        return null;
+    }
+
+    @Override
+    public List<QuizAnswer> getGameRoomAnswers(Long gameRoomId) {
+        return quizAnswerRepository.findByGameRoomId(gameRoomId);
+    }
+
+    @Override
+    public List<QuizAnswer> getTeamAnswers(Long gameRoomId, Long teamId) {
+        return quizAnswerRepository.findByGameRoomIdAndTeamId(gameRoomId, teamId);
+    }
+
+    @Override
+    public void deleteQuestion(Long questionId) {
+
+        Question question = questionRepository.findById(questionId)
+                .orElseThrow(() ->
+                        new RuntimeException("Soru bulunamadÄ±: " + questionId));
+
+        questionRepository.delete(question);
+    }
+
+    // Helper method: Question entity'yi QuestionResponse'a dÃ¶nÃ¼ÅŸtÃ¼r
+    private QuestionResponse mapToQuestionResponse(Question question) {
+        return new QuestionResponse(
+                question.getId(),
+                question.getOptionA(),
+                question.getOptionB(),
+                question.getOptionC(),
+                question.getOptionD(),
+                question.getQuestion(),
+                question.getPoints()
+        );
+    }
+}
+=== QuizWebSocketServiceImpl.java ===
+package com.murdergame.quiz.service.impl;
+
+import com.murdergame.game.entity.GameRoom;
+import com.murdergame.game.entity.GameRoomState;
+import com.murdergame.game.repository.GameRoomRepository;
+import com.murdergame.leaderboard.service.LeaderboardService;
+import com.murdergame.quiz.dto.QuestionBroadcastDTO;
+import com.murdergame.quiz.dto.SubmitAnswerWSRequest;
+import com.murdergame.quiz.entity.Question;
+import com.murdergame.quiz.entity.QuizAnswer;
+import com.murdergame.quiz.repository.QuestionRepository;
+import com.murdergame.quiz.repository.QuizAnswerRepository;
+import com.murdergame.quiz.service.QuizWebSocketService;
+import com.murdergame.team.entity.Team;
+import com.murdergame.team.repository.TeamRepository;
+import com.murdergame.user.entity.User;
+import com.murdergame.user.repository.UserRepository;
+import jakarta.transaction.Transactional;
+import lombok.RequiredArgsConstructor;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.stereotype.Service;
+
+import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
+import java.util.List;
+import java.util.Map;
+
+@Service
+@RequiredArgsConstructor
+public class QuizWebSocketServiceImpl implements QuizWebSocketService {
+
+    private final GameRoomRepository gameRoomRepository;
+    private final QuestionRepository questionRepository;
+    private final QuizAnswerRepository quizAnswerRepository;
+    private final SimpMessagingTemplate messagingTemplate;
+    private final LeaderboardService leaderboardService;
+    private final TeamRepository teamRepository;
+    private final UserRepository userRepository;
+
+    private static final int QUESTION_DURATION_SECONDS = 60;
+
+    @Transactional
+    public void broadcastNextQuestion(Long roomId, Long adminId) {
+        GameRoom room = gameRoomRepository.findById(roomId)
+                .orElseThrow(() -> new RuntimeException("Room not found"));
+
+        // Sonraki index'e geÃ§
+        int nextIndex = (room.getCurrentQuestionIndex() == null)
+                ? 0
+                : room.getCurrentQuestionIndex() + 1;
+
+        // SorularÄ± id'ye gÃ¶re sÄ±ralÄ± Ã§ek
+        List<Question> questions = questionRepository
+                .findByGameRoomIdOrderByIdAsc(roomId);
+
+        System.out.println("=== broadcastNextQuestion roomId: " + roomId + " nextIndex: " + nextIndex + " questions size: " + questions.size() + " ===");
+
+
+        if (nextIndex >= questions.size()) {
+
+            // âœ… YENÄ° â€” state'i DB'de gÃ¼ncelle
+            room.setState(GameRoomState.QUIZ1_ENDED);
+            gameRoomRepository.save(room);
+
+            messagingTemplate.convertAndSend(
+                    "/topic/room/" + roomId + "/question",
+                    Map.of("event", "QUIZ_FINISHED")
+            );
+
+            // âœ… YENÄ° â€” state deÄŸiÅŸimini de ayrÄ±ca broadcast et (opsiyonel ama temiz)
+            messagingTemplate.convertAndSend(
+                    "/topic/room/" + roomId + "/state",
+                    "QUIZ1_ENDED"
+            );
+            return;
+        }
+
+
+        Question question = questions.get(nextIndex);
+
+        // GameRoom gÃ¼ncelle
+        room.setCurrentQuestionId(question.getId());
+        room.setCurrentQuestionIndex(nextIndex);
+        room.setQuestionStartedAt(LocalDateTime.now());
+        gameRoomRepository.save(room);
+
+        // Broadcast â€” correctAnswer olmadan
+        QuestionBroadcastDTO dto = new QuestionBroadcastDTO(
+                question.getId(),
+                nextIndex,
+                question.getQuestion(),
+                question.getOptionA(),
+                question.getOptionB(),
+                question.getOptionC(),
+                question.getOptionD(),
+                question.getPoints(),
+                QUESTION_DURATION_SECONDS
+        );
+
+        messagingTemplate.convertAndSend(
+                "/topic/room/" + roomId + "/question", dto
+        );
+    }
+
+    @Transactional
+    public void submitAnswer(Long roomId, Long userId,
+                             SubmitAnswerWSRequest request) {
+
+        System.out.println("=== submitAnswer roomId: " + roomId + " userId: " + userId + " questionId: " + request.questionId() + " ===");
+
+        if (userId == null) { System.out.println("=== NULL userId ==="); return; }
+
+        GameRoom room = gameRoomRepository.findById(roomId).orElseThrow();
+        System.out.println("=== room currentQuestionId: " + room.getCurrentQuestionId() + " ===");
+
+        if (room.getQuestionStartedAt() == null) { System.out.println("=== questionStartedAt null ==="); return; }
+
+        long elapsed = ChronoUnit.SECONDS.between(room.getQuestionStartedAt(), LocalDateTime.now());
+        System.out.println("=== elapsed: " + elapsed + " ===");
+        if (elapsed > QUESTION_DURATION_SECONDS) { System.out.println("=== SURE DOLDU ==="); return; }
+
+        if (!request.questionId().equals(room.getCurrentQuestionId())) {
+            System.out.println("=== QUESTION ID MISMATCH: request=" + request.questionId() + " current=" + room.getCurrentQuestionId() + " ===");
+            return;
+        }
+
+        User user = userRepository.findById(userId).orElseThrow();
+        System.out.println("=== user team: " + user.getTeam() + " ===");
+
+        Team team = user.getTeam();
+        if (team == null) { System.out.println("=== TEAM NULL ==="); return; }
+
+        Question question = questionRepository.findById(request.questionId()).orElseThrow();
+        boolean alreadyAnswered = quizAnswerRepository.existsByTeamAndQuestion(team, question);
+        System.out.println("=== alreadyAnswered: " + alreadyAnswered + " ===");
+        if (alreadyAnswered) { System.out.println("=== ZATEN CEVAPLANDI ==="); return; }
+
+        System.out.println("=== KAYIT YAPILIYOR ===");
+
+        boolean isCorrect = question.getCorrectAnswer()
+                .equalsIgnoreCase(request.selectedAnswer());
+
+        int bet = (request.betAmount() != null)
+                ? Math.max(0, Math.min(100, request.betAmount()))  // 0-100 arasÄ± zorla
+                : 0;
+
+        int pointsEarned;
+
+        if (bet == 0) {
+            pointsEarned = isCorrect ? question.getPoints() : 0;
+        } else {
+            pointsEarned = isCorrect ? bet : -bet;
+        }
+
+        QuizAnswer answer = QuizAnswer.builder()
+                .gameRoom(room)
+                .team(team)
+                .question(question)
+                .teamAnswer(request.selectedAnswer())
+                .isCorrect(isCorrect)
+                .betAmount(bet)
+                .pointsEarned(pointsEarned)
+                .build();
+
+        quizAnswerRepository.save(answer);
+
+        System.out.println("=== ANSWER SAVED, calling leaderboard ===");
+        var leaderboard = leaderboardService.getLeaderboard();
+        System.out.println("=== LEADERBOARD: " + leaderboard +" ===");
+        messagingTemplate.convertAndSend(
+                "/topic/room/" + roomId + "/leaderboard", leaderboard
+        );
+        System.out.println("=== BROADCAST SENT ===");
+    }
+
+    @Transactional
+    public void endCurrentQuestion(Long roomId) {
+        GameRoom room = gameRoomRepository.findById(roomId)
+                .orElseThrow();
+
+        // DoÄŸru cevabÄ± broadcast et
+        if (room.getCurrentQuestionId() != null) {
+            Question q = questionRepository
+                    .findById(room.getCurrentQuestionId()).orElseThrow();
+
+            messagingTemplate.convertAndSend(
+                    "/topic/room/" + roomId + "/question-result",
+                    Map.of(
+                            "event", "QUESTION_ENDED",
+                            "correctAnswer", q.getCorrectAnswer(),
+                            "questionId", q.getId()
+                    )
+            );
+        }
+    }
+}
+=== ResultsController.java ===
+package com.murdergame.results.controller;
+
+import com.murdergame.results.service.ResultsService;
+import com.murdergame.results.dto.ResultsResponse;
+import com.murdergame.results.dto.Quiz1DetailResponse;
+import com.murdergame.results.dto.Quiz2DetailResponse;
+import lombok.RequiredArgsConstructor;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+import java.util.List;
+
+@RestController
+@RequestMapping("/api/results")
+@RequiredArgsConstructor
+public class ResultsController {
+
+    private final ResultsService resultsService;
+
+    // TakÄ±mÄ±n tÃ¼m sonuÃ§larÄ±
+    @GetMapping("/team/{teamId}")
+    public ResultsResponse getTeamResults(@PathVariable Long teamId) {
+        return resultsService.getTeamResults(teamId);
+    }
+
+    // TakÄ±mÄ±n Quiz 1 detaylarÄ±
+    @GetMapping("/quiz1/{teamId}")
+    public Quiz1DetailResponse getQuiz1Details(@PathVariable Long teamId) {
+        return resultsService.getQuiz1Details(teamId);
+    }
+
+    // TakÄ±mÄ±n Quiz 2 detaylarÄ±
+    @GetMapping("/quiz2/{teamId}")
+    public Quiz2DetailResponse getQuiz2Details(@PathVariable Long teamId) {
+        return resultsService.getQuiz2Details(teamId);
+    }
+
+    // TÃ¼m takÄ±mlarÄ±n sonuÃ§larÄ± (final ranking)
+    @GetMapping("/all")
+    public List<ResultsResponse> getAllResults() {
+        return resultsService.getAllResults();
+    }
+}
+=== Quiz1DetailResponse.java ===
+package com.murdergame.results.dto;
+
+public record Quiz1DetailResponse(
+        Long teamId,
+        String teamName,
+        Integer totalCorrect,
+        Integer totalWrong,
+        Integer totalPoints,
+        Integer totalQuestions
+) {}
+=== Quiz2DetailResponse.java ===
+package com.murdergame.results.dto;
+
+public record Quiz2DetailResponse(
+        Long teamId,
+        String teamName,
+        Integer correctBets,
+        Integer wrongBets,
+        Integer totalGained,
+        Integer totalLost,
+        Integer netPoints
+) {}
+=== ResultsResponse.java ===
+package com.murdergame.results.dto;
+
+import java.util.List;
+
+public record ResultsResponse(
+        Long teamId,
+        String teamName,
+        Integer quiz1Points,
+        Integer quiz1Correct,
+        Integer quiz1Wrong,
+        Integer quiz2Points,
+        Integer quiz2CorrectBets,
+        Integer quiz2WrongBets,
+        Integer finalPoints
+) {}
+=== ResultsService.java ===
+package com.murdergame.results.service;
+
+import com.murdergame.results.dto.ResultsResponse;
+import com.murdergame.results.dto.Quiz1DetailResponse;
+import com.murdergame.results.dto.Quiz2DetailResponse;
+import java.util.List;
+
+public interface ResultsService {
+    ResultsResponse getTeamResults(Long teamId);
+    Quiz1DetailResponse getQuiz1Details(Long teamId);
+    Quiz2DetailResponse getQuiz2Details(Long teamId);
+    List<ResultsResponse> getAllResults();
+}
+=== ResultsServiceImpl.java ===
+package com.murdergame.results.service.impl;
+
+import com.murdergame.results.service.ResultsService;
+import com.murdergame.results.dto.ResultsResponse;
+import com.murdergame.results.dto.Quiz1DetailResponse;
+import com.murdergame.results.dto.Quiz2DetailResponse;
+import com.murdergame.quiz.repository.QuizAnswerRepository;
+//import com.murdergame.quiz2.repository.Quiz2BetRepository;
+import com.murdergame.team.entity.Team;
+import com.murdergame.team.repository.TeamRepository;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import java.util.List;
+import java.util.stream.Collectors;
+
+@Service
+@RequiredArgsConstructor
+@Transactional(readOnly = true)
+public class ResultsServiceImpl implements ResultsService {
+
+    private final TeamRepository teamRepository;
+    private final QuizAnswerRepository quizAnswerRepository;
+//    private final Quiz2BetRepository quiz2BetRepository;
+
+    @Override
+    public ResultsResponse getTeamResults(Long teamId) {
+        Team team = teamRepository.findById(teamId)
+                .orElseThrow(() -> new RuntimeException("TakÄ±m bulunamadÄ±"));
+
+        var quiz1Details = getQuiz1Details(teamId);
+        var quiz2Details = getQuiz2Details(teamId);
+
+        int finalPoints = quiz1Details.totalPoints() + quiz2Details.netPoints();
+
+        return new ResultsResponse(
+                teamId,
+                team.getTeamNo(),
+                quiz1Details.totalPoints(),
+                quiz1Details.totalCorrect(),
+                quiz1Details.totalWrong(),
+                quiz2Details.netPoints(),
+                quiz2Details.correctBets(),
+                quiz2Details.wrongBets(),
+                finalPoints
+        );
+    }
+
+    @Override
+    public Quiz1DetailResponse getQuiz1Details(Long teamId) {
+        Team team = teamRepository.findById(teamId)
+                .orElseThrow(() -> new RuntimeException("TakÄ±m bulunamadÄ±"));
+
+        var answers = quizAnswerRepository.findByTeamId(teamId);
+
+        int correct = (int) answers.stream().filter(a -> a.getIsCorrect()).count();
+        int wrong = (int) answers.stream().filter(a -> !a.getIsCorrect()).count();
+        int totalPoints = answers.stream()
+                .mapToInt(a -> a.getPointsEarned() != null ? a.getPointsEarned() : 0)
+                .sum();
+
+        return new Quiz1DetailResponse(
+                teamId,
+                team.getTeamNo(),
+                correct,
+                wrong,
+                totalPoints,
+                answers.size()
+        );
+    }
+
+    @Override
+    public Quiz2DetailResponse getQuiz2Details(Long teamId) {
+        return null;
+    }
+
+//    @Override
+//    public Quiz2DetailResponse getQuiz2Details(Long teamId) {
+//        Team team = teamRepository.findById(teamId)
+//                .orElseThrow(() -> new RuntimeException("TakÄ±m bulunamadÄ±"));
+//
+//        var bets = quiz2BetRepository.findByTeamId(teamId);
+//
+//        int correctBets = (int) bets.stream().filter(b -> b.getIsCorrect()).count();
+//        int wrongBets = (int) bets.stream().filter(b -> !b.getIsCorrect()).count();
+//
+//        int totalGained = bets.stream()
+//                .filter(b -> b.getIsCorrect())
+//                .mapToInt(b -> b.getResultPoints() > 0 ? b.getResultPoints() : 0)
+//                .sum();
+//
+//        int totalLost = bets.stream()
+//                .filter(b -> !b.getIsCorrect())
+//                .mapToInt(b -> b.getResultPoints() < 0 ? Math.abs(b.getResultPoints()) : 0)
+//                .sum();
+//
+//        int netPoints = bets.stream()
+//                .mapToInt(b -> b.getResultPoints() != null ? b.getResultPoints() : 0)
+//                .sum();
+//
+//        return new Quiz2DetailResponse(
+//                teamId,
+//                team.getTeamNo(),
+//                correctBets,
+//                wrongBets,
+//                totalGained,
+//                totalLost,
+//                netPoints
+//        );
+//    }
+
+    @Override
+    public List<ResultsResponse> getAllResults() {
+        return teamRepository.findAll()
+                .stream()
+                .map(team -> getTeamResults(team.getId()))
+                .sorted((a, b) -> Integer.compare(b.finalPoints(), a.finalPoints()))
+                .collect(Collectors.toList());
+    }
+}
+=== JwtAuthFilter.java ===
+package com.murdergame.security;
+
+import io.jsonwebtoken.Claims;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.stereotype.Component;
+import org.springframework.web.filter.OncePerRequestFilter;
+
+import java.io.IOException;
+import java.util.List;
+
+@Component
+public class JwtAuthFilter extends OncePerRequestFilter {
+
+    private final JwtService jwtService;
+
+    public JwtAuthFilter(JwtService jwtService) {
+        this.jwtService = jwtService;
+    }
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request,
+                                    HttpServletResponse response,
+                                    FilterChain filterChain) throws ServletException, IOException {
+
+        String path = request.getServletPath();
+        if (path.startsWith("/api/auth")
+                || path.equals("/api/health")
+                || path.startsWith("/ws")) {
+            filterChain.doFilter(request, response);
+            return;
+        }
+
+        String authHeader = request.getHeader("Authorization");
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+            filterChain.doFilter(request, response);
+            return;
+        }
+
+        String token = authHeader.substring(7);
+
+        try {
+            Claims claims = jwtService.parse(token);
+            String role = String.valueOf(claims.get("role"));
+
+            var authorities = List.of(new SimpleGrantedAuthority("ROLE_" + role));
+            var authentication = new UsernamePasswordAuthenticationToken(
+                    claims.getSubject(), null, authorities
+            );
+
+
+            System.out.println(authentication.getAuthorities());
+
+            SecurityContextHolder.getContext().setAuthentication(authentication);
+        } catch (Exception ignored) {
+            SecurityContextHolder.clearContext();
+        }
+
+        filterChain.doFilter(request, response);
+    }
+}
+=== JwtService.java ===
+package com.murdergame.security;
+
+import io.jsonwebtoken.*;
+import io.jsonwebtoken.security.Keys;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+
+import javax.crypto.SecretKey;
+import java.util.Date;
+import java.util.Map;
+
+@Slf4j
+@Service
+public class JwtService {
+
+    @Value("${app.jwt.secret}")
+    private String secret;
+
+    @Value("${app.jwt.access-expiration-hours:8}")
+    private long accessExpHours;
+
+    private SecretKey getSigningKey() {
+        return Keys.hmacShaKeyFor(secret.getBytes());
+    }
+
+    public String generateAccessToken(String subject, Map<String, Object> claims) {
+        return Jwts.builder()
+                .setClaims(claims)
+                .setSubject(subject)
+                .setIssuedAt(new Date())
+                .setExpiration(new Date(System.currentTimeMillis() + accessExpHours * 60 * 60 * 1000))
+                .signWith(getSigningKey(), SignatureAlgorithm.HS512)
+                .compact();
+    }
+
+    public Claims parse(String token) {
+        return Jwts.parserBuilder()
+                .setSigningKey(getSigningKey())
+                .build()
+                .parseClaimsJws(token)
+                .getBody();
+    }
+
+    public String extractUsername(String token) {
+        return parse(token).getSubject();
+    }
+
+    public boolean validateToken(String token) {
+        try {
+            parse(token);
+            return true;
+        } catch (JwtException | IllegalArgumentException e) {
+            log.error("JWT validation failed: {}", e.getMessage());
+            return false;
+        }
+    }
+}
+=== WebSocketAuthInterceptor.java ===
+package com.murdergame.security;
+
+import io.jsonwebtoken.Claims;
+import lombok.RequiredArgsConstructor;
+import org.springframework.messaging.Message;
+import org.springframework.messaging.MessageChannel;
+import org.springframework.messaging.simp.stomp.StompCommand;
+import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
+import org.springframework.messaging.support.ChannelInterceptor;
+
+@RequiredArgsConstructor
+public class WebSocketAuthInterceptor implements ChannelInterceptor {
+
+    private final JwtService jwtService;
+
+    @Override
+    public Message<?> preSend(Message<?> message, MessageChannel channel) {
+        StompHeaderAccessor accessor = StompHeaderAccessor.wrap(message);
+
+        System.out.println("=== STOMP COMMAND: " + accessor.getCommand() + " ===");
+
+        if (StompCommand.CONNECT.equals(accessor.getCommand())) {
+            String token = accessor.getFirstNativeHeader("Authorization");
+
+            System.out.println("=== TOKEN HEADER: " + token + " ===");
+
+            if (token != null && token.startsWith("Bearer ")) {
+                token = token.substring(7);
+                try {
+                    Claims claims = jwtService.parse(token);
+                    accessor.setUser(() -> claims.getSubject());
+
+                    // userId ve teamId'yi session'a kaydet
+                    Long userId = claims.get("userId", Long.class);
+                    String role = claims.get("role", String.class);
+                    System.out.println("=== WS CONNECT userId: " + userId + " ===");
+
+                    if (userId != null) {
+                        accessor.getSessionAttributes().put("userId", userId);
+                    }
+                    if (role != null) {
+                        accessor.getSessionAttributes().put("role", role);
+                    }
+
+                } catch (Exception e) {
+                    throw new RuntimeException("Invalid token: " + e.getMessage());
+                }
+            }
+        }
+
+        return message;
+    }
+}
+=== TeamController.java ===
+package com.murdergame.team.controller;
+
+import com.murdergame.team.dto.*;
+import com.murdergame.team.service.TeamService;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.Authentication;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+
+@RestController
+@RequestMapping("/api/team")
+@RequiredArgsConstructor
+public class TeamController {
+
+    private final TeamService teamService;
+
+    // ============ ADMIN ENDPOINTS ============
+
+    // Admin: TakÄ±m oluÅŸtur
+    @PostMapping("/admin/create")
+    @PreAuthorize("hasRole('ADMIN')")
+    @ResponseStatus(HttpStatus.CREATED)
+    public TeamResponse createTeam(@RequestBody CreateTeamRequest request) {
+        return teamService.createTeam(request);
+    }
+
+    // Admin: TÃ¼m takÄ±mlarÄ± getir
+    @GetMapping("/admin/all")
+    @PreAuthorize("hasRole('ADMIN')")
+    public List<TeamResponse> getAllTeams() {
+        return teamService.getAllTeams();
+    }
+
+    // Admin: User'Ä± takÄ±ma ekle (userId ile)
+    @PostMapping("/admin/add-user/{teamId}")
+    @PreAuthorize("hasRole('ADMIN')")
+    public AddUserResponse addUserToTeam(
+            @PathVariable Long teamId,
+            @RequestBody AddUserToTeamRequest request) {
+        return teamService.addUserToTeam(teamId, request.userId());
+    }
+
+    // Admin: User'Ä± takÄ±mdan Ã§Ä±kar
+    @PostMapping("/admin/remove-user/{userId}")
+    @PreAuthorize("hasRole('ADMIN')")
+    public AddUserResponse removeUserFromTeam(@PathVariable Long userId) {
+        return teamService.removeUserFromTeam(userId);
+    }
+
+    // ============ USER ENDPOINTS ============
+
+    // User: Kendisi takÄ±ma katÄ±lÄ±r (token ile)
+    @PostMapping("/join")
+    @PreAuthorize("hasRole('USER')")
+    public AddUserResponse joinTeam(
+            @RequestBody JoinTeamRequest request,
+            Authentication authentication) {
+
+        Long userId = extractUserIdFromToken(authentication);
+        return teamService.userJoinTeam(userId, request);
+    }
+
+    @DeleteMapping("/admin/{teamId}")
+    @PreAuthorize("hasRole('ADMIN')")
+    public void deleteTeam(@PathVariable Long teamId) {
+        teamService.deleteTeam(teamId);
+    }
+
+    // Token'dan userId Ã§Ä±kart (Subject: "USER:5" â†’ 5)
+    private Long extractUserIdFromToken(Authentication authentication) {
+        String subject = authentication.getName();
+        return Long.parseLong(subject.split(":")[1]);
+    }
+}
+=== AddUserResponse.java ===
+package com.murdergame.team.dto;
+
+public record AddUserResponse(
+        Long userId,
+        String username,
+        Long teamId,
+        String teamNo,
+        String message
+) {}
+=== AddUserToTeamRequest.java ===
+package com.murdergame.team.dto;
+
+public record AddUserToTeamRequest(
+        Long userId
+) {}
+=== CreateTeamRequest.java ===
+package com.murdergame.team.dto;
+
+public record CreateTeamRequest(
+        String teamNo,
+        String teamPassword
+) {}
+=== JoinTeamRequest.java ===
+package com.murdergame.team.dto;
+
+public record JoinTeamRequest(
+        String teamNo,
+        String teamPassword,
+        String username  // âœ… Ekle
+) {}
+=== TeamResponse.java ===
+package com.murdergame.team.dto;
+
+public record TeamResponse(
+        Long id,
+        String teamNo,
+        Boolean active
+) {}
+=== Team.java ===
+package com.murdergame.team.entity;
+
+import com.murdergame.game.entity.GameRoom;
+import com.murdergame.quiz.entity.QuizAnswer;
+import jakarta.persistence.*;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.time.LocalDateTime;
+import java.util.List;
+
+@Entity
+@Table(name = "teams")
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public class Team {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(nullable = false, unique = true)
+    private String teamNo;
+
+    @Column(nullable = false)
+    private String teamPasswordHash;
+
+    @Column(nullable = false)
+    @Builder.Default
+    private Boolean active = true;
+
+    @Column(nullable = false, updatable = false)
+    @Builder.Default
+    private LocalDateTime createdAt = LocalDateTime.now();
+
+    // âœ… YENÄ°
+    @ManyToOne
+    @JoinColumn(name = "game_room_id")
+    private GameRoom gameRoom;
+
+    @OneToMany(mappedBy = "team", cascade = CascadeType.REMOVE, orphanRemoval = true)
+    private List<QuizAnswer> quizAnswers;
+}
+=== TeamRepository.java ===
+package com.murdergame.team.repository;
+
+import com.murdergame.team.entity.Team;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+import java.util.Optional;
+
+public interface TeamRepository extends JpaRepository<Team, Long> {
+    Optional<Team> findByTeamNo(String teamNo);
+    boolean existsByTeamNo(String teamNo);
+
+}
+=== TeamService.java ===
+package com.murdergame.team.service;
+
+import com.murdergame.team.dto.CreateTeamRequest;
+import com.murdergame.team.dto.TeamResponse;
+import com.murdergame.team.dto.AddUserResponse;
+import com.murdergame.team.dto.JoinTeamRequest;
+import java.util.List;
+
+public interface TeamService {
+    TeamResponse createTeam(CreateTeamRequest request);
+    List<TeamResponse> getAllTeams();
+
+    // User kendisi takÄ±ma giriyor (token ile)
+    AddUserResponse userJoinTeam(Long userId, JoinTeamRequest request);
+
+    // Admin user ekliyor (token gereksiz)
+    AddUserResponse addUserToTeam(Long teamId, Long userId);
+
+    // Admin user Ã§Ä±karÄ±yor
+    AddUserResponse removeUserFromTeam(Long userId);
+
+    void deleteTeam(Long teamId);
+}
+=== TeamServiceImpl.java ===
+package com.murdergame.team.service.impl;
+
+import com.murdergame.common.exception.BusinessException;
+import com.murdergame.common.exception.InvalidCredentialsException;
+import com.murdergame.common.exception.ResourceNotFoundException;
+import com.murdergame.common.exception.ValidationException;
+import com.murdergame.quiz.repository.QuizAnswerRepository;
+import com.murdergame.team.dto.CreateTeamRequest;
+import com.murdergame.team.dto.TeamResponse;
+import com.murdergame.team.dto.AddUserResponse;
+import com.murdergame.team.dto.JoinTeamRequest;
+import com.murdergame.team.entity.Team;
+import com.murdergame.team.repository.TeamRepository;
+import com.murdergame.team.service.TeamService;
+import com.murdergame.user.entity.User;
+import com.murdergame.user.repository.UserRepository;
+import lombok.RequiredArgsConstructor;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.List;
+
+@Service
+@RequiredArgsConstructor
+@Transactional
+public class TeamServiceImpl implements TeamService {
+
+    private final TeamRepository teamRepository;
+    private final UserRepository userRepository;
+    private final PasswordEncoder passwordEncoder;
+    private final QuizAnswerRepository quizAnswerRepository;
+
+    @Override
+    public TeamResponse createTeam(CreateTeamRequest request) {
+        if (teamRepository.existsByTeamNo(request.teamNo())) {
+            throw new RuntimeException("Team already exists with teamNo: " + request.teamNo());
+        }
+
+        Team team = new Team();
+        team.setTeamNo(request.teamNo());
+        team.setTeamPasswordHash(passwordEncoder.encode(request.teamPassword()));
+        team.setActive(true);
+
+        Team saved = teamRepository.save(team);
+        return toResponse(saved);
+    }
+
+    @Override
+    public List<TeamResponse> getAllTeams() {
+        return teamRepository.findAll()
+                .stream()
+                .map(this::toResponse)
+                .toList();
+    }
+
+    @Override
+    public AddUserResponse userJoinTeam(Long userId, JoinTeamRequest request) {
+        // Token sahibi user'Ä± al
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("KullanÄ±cÄ± bulunamadÄ±"));
+
+        // âœ… TOKEN SAHÄ°BÄ°NÄ°N USERNAME'Ä° KONTROL ET
+        if (!user.getUsername().equals(request.username())) {
+            throw new ValidationException("BaÅŸkasÄ±nÄ±n hesabÄ±yla giriÅŸ yapamazsÄ±n!");
+        }
+
+        if (user.getTeam() != null) {
+            throw new BusinessException("KullanÄ±cÄ± zaten bir takÄ±mda");
+        }
+
+        Team team = teamRepository.findByTeamNo(request.teamNo())
+                .orElseThrow(() -> new ResourceNotFoundException("TakÄ±m bulunamadÄ±"));
+
+        if (!passwordEncoder.matches(request.teamPassword(), team.getTeamPasswordHash())) {
+            throw new InvalidCredentialsException("TakÄ±m ÅŸifresi yanlÄ±ÅŸ");
+        }
+
+        user.setTeam(team);
+        User saved = userRepository.save(user);
+
+        return new AddUserResponse(
+                saved.getId(),
+                saved.getUsername(),
+                team.getId(),
+                team.getTeamNo(),
+                "KullanÄ±cÄ± takÄ±ma baÅŸarÄ±yla katÄ±ldÄ±"
+        );
+    }
+
+    @Override
+    public AddUserResponse addUserToTeam(Long teamId, Long userId) {
+        // User var mÄ±?
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("KullanÄ±cÄ± bulunamadÄ±"));
+
+        // User zaten bir takÄ±mda mÄ±?
+        if (user.getTeam() != null) {
+            throw new RuntimeException("KullanÄ±cÄ± zaten bir takÄ±mda");
+        }
+
+        // TakÄ±m var mÄ±?
+        Team team = teamRepository.findById(teamId)
+                .orElseThrow(() -> new RuntimeException("TakÄ±m bulunamadÄ±"));
+
+        // Admin user'Ä± takÄ±ma ekle
+        user.setTeam(team);
+        User saved = userRepository.save(user);
+
+        return new AddUserResponse(
+                saved.getId(),
+                saved.getUsername(),
+                team.getId(),
+                team.getTeamNo(),
+                "KullanÄ±cÄ± takÄ±ma eklenmiÅŸtir (Admin tarafÄ±ndan)"
+        );
+    }
+
+    @Override
+    public AddUserResponse removeUserFromTeam(Long userId) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("KullanÄ±cÄ± bulunamadÄ±"));
+
+        if (user.getTeam() == null) {
+            throw new RuntimeException("KullanÄ±cÄ± bir takÄ±mda deÄŸil");
+        }
+
+        Long teamId = user.getTeam().getId();
+        String teamNo = user.getTeam().getTeamNo();
+        user.setTeam(null);
+        User saved = userRepository.save(user);
+
+        return new AddUserResponse(
+                saved.getId(),
+                saved.getUsername(),
+                teamId,
+                teamNo,
+                "KullanÄ±cÄ± takÄ±mdan Ã§Ä±karÄ±ldÄ±"
+        );
+    }
+
+    @Override
+    @Transactional
+    public void deleteTeam(Long teamId) {
+
+        Team team = teamRepository.findById(teamId)
+                .orElseThrow(() -> new RuntimeException("TakÄ±m bulunamadÄ±: " + teamId));
+
+        // 1. users detach et
+        userRepository.clearTeam(teamId); // team_id = null yap
+
+        // 2. quiz answers sil (veya detach)
+        quizAnswerRepository.deleteByTeamId(teamId);
+
+        // 3. team sil
+        teamRepository.delete(team);
+    }
+
+    private TeamResponse toResponse(Team team) {
+        return new TeamResponse(team.getId(), team.getTeamNo(), team.getActive());
+    }
+}
+=== User.java ===
+package com.murdergame.user.entity;
+
+import com.murdergame.team.entity.Team;
+import jakarta.persistence.*;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.time.LocalDateTime;
+
+@Entity
+@Table(name = "users")
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public class User {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(nullable = false, unique = true)
+    private String username;
+
+    @Column(nullable = false, updatable = false)
+    @Builder.Default
+    private LocalDateTime createdAt = LocalDateTime.now();
+
+    @Column(nullable = false)
+    @Builder.Default
+    private LocalDateTime updatedAt = LocalDateTime.now();
+
+    @Column(nullable = false)
+    @Builder.Default
+    private Boolean active = true;
+
+    // âœ… FIX: team_id nullable olabilir (baÅŸta takÄ±msÄ±z)
+    @ManyToOne
+    @JoinColumn(name = "team_id", nullable = true)  // â† BURAYI DEÄIÅTIR
+    private Team team;
+}
+=== UserRepository.java ===
+package com.murdergame.user.repository;
+
+import com.murdergame.user.entity.User;
+import jakarta.transaction.Transactional;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import org.springframework.stereotype.Repository;
+
+import java.util.Optional;
+
+@Repository
+public interface UserRepository extends JpaRepository<User, Long> {
+    boolean existsByTeamIdAndUsername(Long teamId, String username);
+    Optional<User> findByTeamIdAndUsername(Long teamId, String username);
+    Optional<User> findByTeamIdAndUsernameAndActiveTrue(Long teamId, String username);
+    boolean existsByUsername(String username);  // â† BUNU EKLE
+    Optional<User> findByUsername(String username);
+
+    @Modifying
+    @Transactional
+    @Query("UPDATE User u SET u.team = null WHERE u.team.id = :teamId")
+    void clearTeam(@Param("teamId") Long teamId);
+}
+=== UsernameValidator.java ===
+package com.murdergame.user.validator;
+
+import org.springframework.stereotype.Component;
+import java.util.regex.Pattern;
+
+@Component
+public class UsernameValidator {
+
+    // 3-20 karakter, a-z, A-Z, 0-9, _, - sadece
+    // baÅŸÄ±nda/sonunda harf veya rakam olmalÄ±
+    private static final Pattern VALID_USERNAME =
+            Pattern.compile("^[a-zA-Z0-9]([a-zA-Z0-9_-]{1,18}[a-zA-Z0-9])?$");
+
+    // KÃ¼fÃ¼rlÃ¼ / Rezerve Kelimeleri Blocklist'e al
+    private static final String[] BLOCKLIST = {
+            "admin", "root", "system", "moderator", "administrator",
+            "bok", "sik", "am", "bacak", "salak", "orospu", "piÃ§", "it",
+            "test", "user123", "admin123", "password", "123456",
+            "murdergame", "killer", "victim", "null", "undefined",
+            "fuck", "shit", "bitch", "ass", "cock", "dick",
+            "xxx", "porn", "sex", "rape", "kill", "die"
+    };
+
+    /**
+     * Username'in valid olup olmadÄ±ÄŸÄ±nÄ± kontrol eder
+     */
+    public boolean isValid(String username) {
+        if (username == null || username.isEmpty()) {
+            return false;
+        }
+
+        if (!VALID_USERNAME.matcher(username).matches()) {
+            return false;
+        }
+
+        String lowerUsername = username.toLowerCase();
+        for (String blocked : BLOCKLIST) {
+            if (lowerUsername.contains(blocked)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Validation hatasÄ± varsa aÃ§Ä±klayÄ±cÄ± mesaj dÃ¶ndÃ¼rÃ¼r
+     */
+    public String getValidationError(String username) {
+        if (username == null || username.isEmpty()) {
+            return "Username boÅŸ olamaz";
+        }
+
+        if (username.length() < 3) {
+            return "Username minimum 3 karakter olmalÄ±";
+        }
+
+        if (username.length() > 20) {
+            return "Username maksimum 20 karakter olmalÄ±";
+        }
+
+        if (!VALID_USERNAME.matcher(username).matches()) {
+            return "Username sadece harf, rakam, _ ve - iÃ§erebilir (baÅŸÄ±nda ve sonunda harf veya rakam olmalÄ±)";
+        }
+
+        String lowerUsername = username.toLowerCase();
+        for (String blocked : BLOCKLIST) {
+            if (lowerUsername.contains(blocked)) {
+                return "Bu username kullanÄ±lamaz (uygunsuz iÃ§erik veya rezerve kelime)";
+            }
+        }
+
+        return null; // Valid
+    }
+}

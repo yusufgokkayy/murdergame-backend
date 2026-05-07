@@ -139,6 +139,32 @@ public class TeamServiceImpl implements TeamService {
         );
     }
 
+    // YENİ EKLENEN METOT
+    @Override
+    public AddUserResponse setSpokesperson(Long teamId, Long userId) {
+        Team team = teamRepository.findById(teamId)
+                .orElseThrow(() -> new ResourceNotFoundException("Takım bulunamadı"));
+
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("Kullanıcı bulunamadı"));
+
+        // Kullanıcı bu takımda mı diye kontrol et
+        if (user.getTeam() == null || !user.getTeam().getId().equals(teamId)) {
+            throw new BusinessException("Kullanıcı bu takımda değil, önce takıma eklemelisiniz.");
+        }
+
+        team.setSpokespersonId(userId);
+        Team saved = teamRepository.save(team);
+
+        return new AddUserResponse(
+                user.getId(),
+                user.getUsername(),
+                team.getId(),
+                team.getTeamNo(),
+                "Kullanıcı başarıyla takım sözcüsü olarak atandı."
+        );
+    }
+
     @Override
     @Transactional
     public void deleteTeam(Long teamId) {
