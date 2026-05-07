@@ -31,11 +31,6 @@ public class AdminController {
 
     private final AuthService authService;
 
-    @GetMapping("/users")
-    public ResponseEntity<List<UserResponse>> getAllUsers() {
-        return ResponseEntity.ok(authService.getAllUsers());
-    }
-
     @DeleteMapping("/users/{userId}")
     public ResponseEntity<String> deleteUser(@PathVariable Long userId) {
         authService.deleteUser(userId);
@@ -77,6 +72,12 @@ public class AuthController {
     public AuthResponse userRegister(@RequestBody UserRegisterRequest request) {
         return authService.userRegister(request);
     }
+
+    @GetMapping("/users")
+    public ResponseEntity<List<UserResponse>> getAllUsers() {
+        return ResponseEntity.ok(authService.getAllUsers());
+    }
+
 }
 === AdminLoginRequest.java ===
 package com.murdergame.auth.dto;
@@ -780,6 +781,7 @@ import com.murdergame.cluegame.entity.ClueGameFinalAnswer;
 import com.murdergame.cluegame.repository.ClueGameRepository;
 import com.murdergame.cluegame.repository.ClueGameGuessRepository;
 import com.murdergame.cluegame.repository.ClueGameFinalAnswerRepository;
+import com.murdergame.common.exception.BusinessException;
 import com.murdergame.quiz.repository.QuizAnswerRepository;
 import com.murdergame.team.entity.Team;
 import com.murdergame.team.repository.TeamRepository;
@@ -838,6 +840,11 @@ public class ClueGameServiceImpl implements ClueGameService {
         ClueGame clueGame = clueGameRepository.findByIdAndIsActiveTrue(request.clueGameId())
                 .orElseThrow(() -> new RuntimeException("Oyun bulunamadÄ±"));
 
+        // -------- YENÄ°: SÃ–ZCÃœ KONTROLÃœ --------
+//        if (team.getSpokespersonId() == null || !team.getSpokespersonId().equals(userId)) {
+//            throw new BusinessException("Sadece takÄ±m sÃ¶zcÃ¼sÃ¼ tahmin gÃ¶nderebilir!");
+//        }
+
         // Guess kaydet â€” puan henÃ¼z 0, admin sonra verecek
         ClueGameGuess guess = ClueGameGuess.builder()
                 .clueGame(clueGame)
@@ -870,6 +877,11 @@ public class ClueGameServiceImpl implements ClueGameService {
 
         ClueGame clueGame = clueGameRepository.findByIdAndIsActiveTrue(request.clueGameId())
                 .orElseThrow(() -> new RuntimeException("Oyun bulunamadÄ±"));
+
+        // -------- YENÄ°: SÃ–ZCÃœ KONTROLÃœ --------
+//        if (team.getSpokespersonId() == null || !team.getSpokespersonId().equals(userId)) {
+//            throw new BusinessException("Sadece takÄ±m sÃ¶zcÃ¼sÃ¼ final cevabÄ± gÃ¶nderebilir!");
+//        }
 
         // Final cevap doÄŸru mu?
         boolean isCorrect = clueGame.getKillerName()
@@ -962,6 +974,9 @@ public class SecurityConfig {
                         // PUBLIC
                         .requestMatchers(
                                 "/api/auth/**",
+                                "/api/team/all",
+                                "/api/quiz/room/**",    // <-- BURAYI DEÄÄ°ÅTÄ°R (tek * yerine **)
+                                "/api/quiz/question/**", // <-- BUNU DA EKLE (belirli bir soruyu getirme de public olsun)
                                 "/test.html",
                                 "/quiz.html",
                                 "/css/**",
@@ -2257,6 +2272,11 @@ import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 @Service
 @RequiredArgsConstructor
@@ -2272,10 +2292,23 @@ public class QuizWebSocketServiceImpl implements QuizWebSocketService {
 
     private static final int QUESTION_DURATION_SECONDS = 60;
 
+    // --- YENÄ°: Backend timer iÃ§in Scheduler ve oda bazlÄ± sayaÃ§larÄ± tutacaÄŸÄ±mÄ±z Map ---
+    private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(5);
+    private final Map<Long, ScheduledFuture<?>> roomTimers = new ConcurrentHashMap<>();
+    // ---------------------------------------------------------------------------------
+
     @Transactional
     public void broadcastNextQuestion(Long roomId, Long adminId) {
         GameRoom room = gameRoomRepository.findById(roomId)
                 .orElseThrow(() -> new RuntimeException("Room not found"));
+
+        // --- YENÄ° GÃœVENLÄ°K: Admin butona Ã§ift tÄ±klarsa veya yanlÄ±ÅŸlÄ±kla tekrar basarsa Ã¶nceki sayacÄ± iptal et ---
+        ScheduledFuture<?> existingTimer = roomTimers.get(roomId);
+        if (existingTimer != null && !existingTimer.isDone()) {
+            existingTimer.cancel(false);
+            System.out.println("=== Ã–NCEKÄ° SAYAÃ‡ Ä°PTAL EDÄ°LDÄ° (Yeni soruya geÃ§ildi) ===");
+        }
+        // ----------------------------------------------------------------------------------------------------
 
         // Sonraki index'e geÃ§
         int nextIndex = (room.getCurrentQuestionIndex() == null)
@@ -2288,10 +2321,7 @@ public class QuizWebSocketServiceImpl implements QuizWebSocketService {
 
         System.out.println("=== broadcastNextQuestion roomId: " + roomId + " nextIndex: " + nextIndex + " questions size: " + questions.size() + " ===");
 
-
         if (nextIndex >= questions.size()) {
-
-            // âœ… YENÄ° â€” state'i DB'de gÃ¼ncelle
             room.setState(GameRoomState.QUIZ1_ENDED);
             gameRoomRepository.save(room);
 
@@ -2300,14 +2330,12 @@ public class QuizWebSocketServiceImpl implements QuizWebSocketService {
                     Map.of("event", "QUIZ_FINISHED")
             );
 
-            // âœ… YENÄ° â€” state deÄŸiÅŸimini de ayrÄ±ca broadcast et (opsiyonel ama temiz)
             messagingTemplate.convertAndSend(
                     "/topic/room/" + roomId + "/state",
                     "QUIZ1_ENDED"
             );
             return;
         }
-
 
         Question question = questions.get(nextIndex);
 
@@ -2333,6 +2361,21 @@ public class QuizWebSocketServiceImpl implements QuizWebSocketService {
         messagingTemplate.convertAndSend(
                 "/topic/room/" + roomId + "/question", dto
         );
+
+        // --- YENÄ°: 60 saniye sonrasÄ±na timer kur. SÃ¼re bitince otomatik endCurrentQuestion Ã§alÄ±ÅŸsÄ±n! ---
+        ScheduledFuture<?> newTimer = scheduler.schedule(() -> {
+            try {
+                System.out.println("=== SÃœRE DOLDU! OTOMATÄ°K OLARAK SORU BÄ°TÄ°RÄ°LÄ°YOR (Room: " + roomId + ") ===");
+                // ZamanlayÄ±cÄ± thread iÃ§inde olduÄŸu iÃ§in transaction proxy'sini kendi Ã¼zerinden tetiklemek adÄ±na metodu direkt Ã§aÄŸÄ±rÄ±yoruz
+                endCurrentQuestion(roomId);
+            } catch (Exception e) {
+                System.err.println("Otomatik soru bitirme sÄ±rasÄ±nda hata: " + e.getMessage());
+            }
+        }, QUESTION_DURATION_SECONDS, TimeUnit.SECONDS);
+
+        // Timer'Ä± haritaya kaydet
+        roomTimers.put(roomId, newTimer);
+        // ---------------------------------------------------------------------------------------------
     }
 
     @Transactional
@@ -2344,13 +2387,11 @@ public class QuizWebSocketServiceImpl implements QuizWebSocketService {
         if (userId == null) { System.out.println("=== NULL userId ==="); return; }
 
         GameRoom room = gameRoomRepository.findById(roomId).orElseThrow();
-        System.out.println("=== room currentQuestionId: " + room.getCurrentQuestionId() + " ===");
 
         if (room.getQuestionStartedAt() == null) { System.out.println("=== questionStartedAt null ==="); return; }
 
         long elapsed = ChronoUnit.SECONDS.between(room.getQuestionStartedAt(), LocalDateTime.now());
-        System.out.println("=== elapsed: " + elapsed + " ===");
-        if (elapsed > QUESTION_DURATION_SECONDS) { System.out.println("=== SURE DOLDU ==="); return; }
+        if (elapsed > QUESTION_DURATION_SECONDS) { System.out.println("=== SURE DOLDU (Sunucu ZamanÄ±) ==="); return; }
 
         if (!request.questionId().equals(room.getCurrentQuestionId())) {
             System.out.println("=== QUESTION ID MISMATCH: request=" + request.questionId() + " current=" + room.getCurrentQuestionId() + " ===");
@@ -2358,17 +2399,19 @@ public class QuizWebSocketServiceImpl implements QuizWebSocketService {
         }
 
         User user = userRepository.findById(userId).orElseThrow();
-        System.out.println("=== user team: " + user.getTeam() + " ===");
-
         Team team = user.getTeam();
         if (team == null) { System.out.println("=== TEAM NULL ==="); return; }
 
+        // --- YENÄ°: SÃ–ZCÃœ KONTROLÃœ ---
+        if (team.getSpokespersonId() == null || !team.getSpokespersonId().equals(userId)) {
+            System.out.println("=== YETKÄ°SÄ°Z CEVAP: Sadece takÄ±m sÃ¶zcÃ¼sÃ¼ cevap verebilir. (UserId: " + userId + ") ===");
+            return; // SÃ¶zcÃ¼ deÄŸilse iÅŸlemi sonlandÄ±r
+        }
+        // ----------------------------
+
         Question question = questionRepository.findById(request.questionId()).orElseThrow();
         boolean alreadyAnswered = quizAnswerRepository.existsByTeamAndQuestion(team, question);
-        System.out.println("=== alreadyAnswered: " + alreadyAnswered + " ===");
         if (alreadyAnswered) { System.out.println("=== ZATEN CEVAPLANDI ==="); return; }
-
-        System.out.println("=== KAYIT YAPILIYOR ===");
 
         boolean isCorrect = question.getCorrectAnswer()
                 .equalsIgnoreCase(request.selectedAnswer());
@@ -2399,7 +2442,6 @@ public class QuizWebSocketServiceImpl implements QuizWebSocketService {
 
         System.out.println("=== ANSWER SAVED, calling leaderboard ===");
         var leaderboard = leaderboardService.getLeaderboard();
-        System.out.println("=== LEADERBOARD: " + leaderboard +" ===");
         messagingTemplate.convertAndSend(
                 "/topic/room/" + roomId + "/leaderboard", leaderboard
         );
@@ -2408,22 +2450,27 @@ public class QuizWebSocketServiceImpl implements QuizWebSocketService {
 
     @Transactional
     public void endCurrentQuestion(Long roomId) {
-        GameRoom room = gameRoomRepository.findById(roomId)
-                .orElseThrow();
+        // Ä°ÅŸlem bittiÄŸinde temizlik yap
+        roomTimers.remove(roomId);
+
+        GameRoom room = gameRoomRepository.findById(roomId).orElse(null);
+        if (room == null) return;
 
         // DoÄŸru cevabÄ± broadcast et
         if (room.getCurrentQuestionId() != null) {
             Question q = questionRepository
-                    .findById(room.getCurrentQuestionId()).orElseThrow();
+                    .findById(room.getCurrentQuestionId()).orElse(null);
 
-            messagingTemplate.convertAndSend(
-                    "/topic/room/" + roomId + "/question-result",
-                    Map.of(
-                            "event", "QUESTION_ENDED",
-                            "correctAnswer", q.getCorrectAnswer(),
-                            "questionId", q.getId()
-                    )
-            );
+            if (q != null) {
+                messagingTemplate.convertAndSend(
+                        "/topic/room/" + roomId + "/question-result",
+                        Map.of(
+                                "event", "QUESTION_ENDED",
+                                "correctAnswer", q.getCorrectAnswer(),
+                                "questionId", q.getId()
+                        )
+                );
+            }
         }
     }
 }
@@ -2533,7 +2580,6 @@ import com.murdergame.results.dto.ResultsResponse;
 import com.murdergame.results.dto.Quiz1DetailResponse;
 import com.murdergame.results.dto.Quiz2DetailResponse;
 import com.murdergame.quiz.repository.QuizAnswerRepository;
-//import com.murdergame.quiz2.repository.Quiz2BetRepository;
 import com.murdergame.team.entity.Team;
 import com.murdergame.team.repository.TeamRepository;
 import lombok.RequiredArgsConstructor;
@@ -2549,7 +2595,6 @@ public class ResultsServiceImpl implements ResultsService {
 
     private final TeamRepository teamRepository;
     private final QuizAnswerRepository quizAnswerRepository;
-//    private final Quiz2BetRepository quiz2BetRepository;
 
     @Override
     public ResultsResponse getTeamResults(Long teamId) {
@@ -2559,6 +2604,7 @@ public class ResultsServiceImpl implements ResultsService {
         var quiz1Details = getQuiz1Details(teamId);
         var quiz2Details = getQuiz2Details(teamId);
 
+        // ArtÄ±k quiz2Details null dÃ¶nmediÄŸi iÃ§in BURASI Ã‡Ã–KMEYECEK!
         int finalPoints = quiz1Details.totalPoints() + quiz2Details.netPoints();
 
         return new ResultsResponse(
@@ -2579,11 +2625,14 @@ public class ResultsServiceImpl implements ResultsService {
         Team team = teamRepository.findById(teamId)
                 .orElseThrow(() -> new RuntimeException("TakÄ±m bulunamadÄ±"));
 
-        var answers = quizAnswerRepository.findByTeamId(teamId);
+        // TakÄ±mÄ±n tÃ¼m cevaplarÄ±nÄ± Ã§ek, sadece bahissiz (betAmount = 0) olanlarÄ± al
+        var quiz1Answers = quizAnswerRepository.findByTeamId(teamId).stream()
+                .filter(a -> a.getBetAmount() == null || a.getBetAmount() == 0)
+                .toList();
 
-        int correct = (int) answers.stream().filter(a -> a.getIsCorrect()).count();
-        int wrong = (int) answers.stream().filter(a -> !a.getIsCorrect()).count();
-        int totalPoints = answers.stream()
+        int correct = (int) quiz1Answers.stream().filter(a -> a.getIsCorrect()).count();
+        int wrong = (int) quiz1Answers.stream().filter(a -> !a.getIsCorrect()).count();
+        int totalPoints = quiz1Answers.stream()
                 .mapToInt(a -> a.getPointsEarned() != null ? a.getPointsEarned() : 0)
                 .sum();
 
@@ -2593,49 +2642,47 @@ public class ResultsServiceImpl implements ResultsService {
                 correct,
                 wrong,
                 totalPoints,
-                answers.size()
+                quiz1Answers.size()
         );
     }
 
     @Override
     public Quiz2DetailResponse getQuiz2Details(Long teamId) {
-        return null;
-    }
+        Team team = teamRepository.findById(teamId)
+                .orElseThrow(() -> new RuntimeException("TakÄ±m bulunamadÄ±"));
 
-//    @Override
-//    public Quiz2DetailResponse getQuiz2Details(Long teamId) {
-//        Team team = teamRepository.findById(teamId)
-//                .orElseThrow(() -> new RuntimeException("TakÄ±m bulunamadÄ±"));
-//
-//        var bets = quiz2BetRepository.findByTeamId(teamId);
-//
-//        int correctBets = (int) bets.stream().filter(b -> b.getIsCorrect()).count();
-//        int wrongBets = (int) bets.stream().filter(b -> !b.getIsCorrect()).count();
-//
-//        int totalGained = bets.stream()
-//                .filter(b -> b.getIsCorrect())
-//                .mapToInt(b -> b.getResultPoints() > 0 ? b.getResultPoints() : 0)
-//                .sum();
-//
-//        int totalLost = bets.stream()
-//                .filter(b -> !b.getIsCorrect())
-//                .mapToInt(b -> b.getResultPoints() < 0 ? Math.abs(b.getResultPoints()) : 0)
-//                .sum();
-//
-//        int netPoints = bets.stream()
-//                .mapToInt(b -> b.getResultPoints() != null ? b.getResultPoints() : 0)
-//                .sum();
-//
-//        return new Quiz2DetailResponse(
-//                teamId,
-//                team.getTeamNo(),
-//                correctBets,
-//                wrongBets,
-//                totalGained,
-//                totalLost,
-//                netPoints
-//        );
-//    }
+        // TakÄ±mÄ±n tÃ¼m cevaplarÄ±nÄ± Ã§ek, sadece bahisli (betAmount > 0) olanlarÄ± al
+        var bets = quizAnswerRepository.findByTeamId(teamId).stream()
+                .filter(a -> a.getBetAmount() != null && a.getBetAmount() > 0)
+                .toList();
+
+        int correctBets = (int) bets.stream().filter(a -> a.getIsCorrect()).count();
+        int wrongBets = (int) bets.stream().filter(a -> !a.getIsCorrect()).count();
+
+        int totalGained = bets.stream()
+                .filter(a -> a.getIsCorrect())
+                .mapToInt(a -> a.getPointsEarned() > 0 ? a.getPointsEarned() : 0)
+                .sum();
+
+        int totalLost = bets.stream()
+                .filter(a -> !a.getIsCorrect())
+                .mapToInt(a -> a.getPointsEarned() < 0 ? Math.abs(a.getPointsEarned()) : 0)
+                .sum();
+
+        int netPoints = bets.stream()
+                .mapToInt(a -> a.getPointsEarned() != null ? a.getPointsEarned() : 0)
+                .sum();
+
+        return new Quiz2DetailResponse(
+                teamId,
+                team.getTeamNo(),
+                correctBets,
+                wrongBets,
+                totalGained,
+                totalLost,
+                netPoints
+        );
+    }
 
     @Override
     public List<ResultsResponse> getAllResults() {
@@ -2856,9 +2903,7 @@ public class TeamController {
         return teamService.createTeam(request);
     }
 
-    // Admin: TÃ¼m takÄ±mlarÄ± getir
-    @GetMapping("/admin/all")
-    @PreAuthorize("hasRole('ADMIN')")
+    @GetMapping("/all")
     public List<TeamResponse> getAllTeams() {
         return teamService.getAllTeams();
     }
@@ -2890,6 +2935,14 @@ public class TeamController {
 
         Long userId = extractUserIdFromToken(authentication);
         return teamService.userJoinTeam(userId, request);
+    }
+
+    // YENÄ° EKLENEN ENDPOINT
+    // Admin: TakÄ±ma sÃ¶zcÃ¼ ata
+    @PostMapping("/admin/{teamId}/set-spokesperson/{userId}")
+    @PreAuthorize("hasRole('ADMIN')")
+    public AddUserResponse setSpokesperson(@PathVariable Long teamId, @PathVariable Long userId) {
+        return teamService.setSpokesperson(teamId, userId);
     }
 
     @DeleteMapping("/admin/{teamId}")
@@ -2990,6 +3043,9 @@ public class Team {
 
     @OneToMany(mappedBy = "team", cascade = CascadeType.REMOVE, orphanRemoval = true)
     private List<QuizAnswer> quizAnswers;
+
+    @Column(name = "spokesperson_id")
+    private Long spokespersonId;
 }
 === TeamRepository.java ===
 package com.murdergame.team.repository;
@@ -3025,6 +3081,9 @@ public interface TeamService {
 
     // Admin user Ã§Ä±karÄ±yor
     AddUserResponse removeUserFromTeam(Long userId);
+
+    // YENÄ°: SÃ¶zcÃ¼ atama
+    AddUserResponse setSpokesperson(Long teamId, Long userId);
 
     void deleteTeam(Long teamId);
 }
@@ -3167,6 +3226,32 @@ public class TeamServiceImpl implements TeamService {
                 teamId,
                 teamNo,
                 "KullanÄ±cÄ± takÄ±mdan Ã§Ä±karÄ±ldÄ±"
+        );
+    }
+
+    // YENÄ° EKLENEN METOT
+    @Override
+    public AddUserResponse setSpokesperson(Long teamId, Long userId) {
+        Team team = teamRepository.findById(teamId)
+                .orElseThrow(() -> new ResourceNotFoundException("TakÄ±m bulunamadÄ±"));
+
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("KullanÄ±cÄ± bulunamadÄ±"));
+
+        // KullanÄ±cÄ± bu takÄ±mda mÄ± diye kontrol et
+        if (user.getTeam() == null || !user.getTeam().getId().equals(teamId)) {
+            throw new BusinessException("KullanÄ±cÄ± bu takÄ±mda deÄŸil, Ã¶nce takÄ±ma eklemelisiniz.");
+        }
+
+        team.setSpokespersonId(userId);
+        Team saved = teamRepository.save(team);
+
+        return new AddUserResponse(
+                user.getId(),
+                user.getUsername(),
+                team.getId(),
+                team.getTeamNo(),
+                "KullanÄ±cÄ± baÅŸarÄ±yla takÄ±m sÃ¶zcÃ¼sÃ¼ olarak atandÄ±."
         );
     }
 

@@ -1,373 +1,132 @@
-# MurderGame — GDG Event Game Platform
+# 🕵️‍♂️ Murder Game - Interactive Real-Time Backend
 
-Spring Boot tabanlı, WebSocket destekli çok oyunculu etkinlik oyun platformu. Quiz1, Quiz2 ve Katil Kim (ClueGame) oyunlarını gerçek zamanlı olarak yönetir.
+This is the backend server for **Murder Game**, a real-time multiplayer team game that combines trivia, betting mechanics, and a murder mystery (Clue Game) module. Built with **Spring Boot** and **WebSockets**, it provides a seamless, zero-refresh experience for game participants.
 
----
+## 🚀 Key Features
 
-## Teknolojiler
+### 1. Real-Time Quiz Engine (WebSockets)
+* **Live Broadcasting:** Questions, room states, and correct answers are pushed to clients instantly.
+* **Server-Side Timer:** An autonomous 60-second timer (`ScheduledExecutorService`) runs securely on the backend. When time is up, the system automatically evaluates answers and broadcasts results. Double-click safety is implemented.
+* **Spokesperson Logic:** Only designated team "Spokespersons" can submit answers, preventing team-internal data conflicts and spam.
 
-- **Java 17** + **Spring Boot 3**
-- **Spring Security** + **JWT** (HS512)
-- **Spring WebSocket** + **STOMP** + **SockJS**
-- **PostgreSQL** + **Spring Data JPA**
-- **Lombok**
+### 2. Hybrid Quiz System (Standard & Betting)
+* **Quiz 1 (Standard):** Teams earn fixed points for correct answers.
+* **Quiz 2 (Betting/Risk):** Teams can wager their existing points (`betAmount`). Correct answers add the wager to their score, while incorrect answers deduct it.
 
----
+### 3. Murder Mystery (Clue Game)
+* A separate asynchronous game mode where teams evaluate clues to guess the "Killer".
+* Real-time guess submission (restricted to Spokespersons).
+* Admin console for scoring guesses (+50, 0, +100) and triggering the "Final Answer" time.
 
-## Mimari
+### 4. Advanced Team Management
+* Secure team joining via `teamNo` and `teamPasswordHash`.
+* Admin controls for bulk team additions to Game Rooms and assigning Spokespersons.
 
-```
-com.murdergame
-├── auth          → Kayıt, giriş, JWT üretimi
-├── cluegame      → Katil Kim oyun mantığı
-├── common        → Config, exception, güvenlik
-├── game          → Oda yönetimi, state machine
-├── leaderboard   → Anlık puan tablosu
-├── quiz          → Quiz1/2 soru ve cevap yönetimi
-├── team          → Takım yönetimi
-└── user          → Kullanıcı yönetimi
-```
+### 5. Live Leaderboard & Detailed Reporting
+* **Dynamic Leaderboard:** Aggregates scores from both Quiz answers and Clue Game guesses in real-time.
+* **Results Module:** Advanced filtering that separates Quiz 1 (no bet) and Quiz 2 (bet > 0) statistics, providing detailed post-game reports (corrects, wrongs, total gained/lost) without crashing or data overlapping.
 
----
+### 6. Robust Security & Validation
+* **JWT Authentication:** Stateless security architecture. WebSockets are also secured using a custom `ChannelInterceptor` that parses JWTs on connection.
+* **Role-Based Access Control:** Strict separation between `PUBLIC`, `USER`, and `ADMIN` endpoints.
+* **Username Validation:** Custom blocklist to prevent reserved keywords and inappropriate usernames.
 
-## Oyun Akışı
+## 🛠️ Technology Stack
+* **Java 17+**
+* **Spring Boot 3.x**
+* **Spring Security & JWT** (JSON Web Tokens)
+* **Spring WebSockets & STOMP**
+* **Spring Data JPA & Hibernate**
+* **Database:** (e.g., PostgreSQL/MySQL/H2)
+* **Lombok**
 
-```
-WAITING → QUIZ1 → QUIZ1_ENDED → QUIZ2 → QUIZ2_ENDED → CLUEGAME → CLUEGAME_FINAL → ENDED
-```
+## 🌐 API Endpoints Reference
 
-Admin her state geçişini manuel tetikler. Geçiş anında tüm bağlı clientlara WebSocket broadcast gönderilir.
+### 🔐 Authentication & Users
+| Method | Endpoint | Description | Access |
+|--------|----------|-------------|--------|
+| `POST` | `/api/auth/admin/login` | Admin login to get JWT | Public |
+| `POST` | `/api/auth/user/login` | Team/User login | Public |
+| `POST` | `/api/auth/user/register` | Register a new user | Public |
+| `GET`  | `/api/auth/users` | List all registered users | Public |
+| `DELETE`| `/api/admin/users/{userId}` | Delete a user | Admin |
 
----
+### 👥 Team Management
+| Method | Endpoint | Description | Access |
+|--------|----------|-------------|--------|
+| `GET`  | `/api/team/all` | Get list of all teams | Public |
+| `POST` | `/api/team/join` | User joins a team | User |
+| `POST` | `/api/team/admin/create` | Create a new team | Admin |
+| `POST` | `/api/team/admin/{teamId}/set-spokesperson/{userId}` | Assign team spokesperson | Admin |
+| `POST` | `/api/team/admin/add-user/{teamId}` | Force add user to team | Admin |
+| `POST` | `/api/team/admin/remove-user/{userId}` | Remove user from team | Admin |
 
-## Kurulum
+### 🎮 Game Room & Quiz
+| Method | Endpoint | Description | Access |
+|--------|----------|-------------|--------|
+| `POST` | `/api/game-room/create` | Create a new game room | Admin |
+| `PUT`  | `/api/game-room/{roomId}/state` | Update game state (e.g., QUIZ1) | Admin |
+| `POST` | `/api/game-room/{roomId}/add-teams` | Bulk add teams to a room | Admin |
+| `GET`  | `/api/quiz/room/{gameRoomId}/questions` | Get all questions for a room | Public |
+| `POST` | `/api/quiz/room/{gameRoomId}/questions/multiple`| Bulk insert questions | Admin |
+| `GET`  | `/api/quiz/room/{gameRoomId}/answers` | Get all submitted answers | Admin |
 
-### Gereksinimler
-- Java 17+
-- PostgreSQL 14+
-- Maven 3.8+
+### 🕵️ Clue Game (Murder Mystery)
+| Method | Endpoint | Description | Access |
+|--------|----------|-------------|--------|
+| `POST` | `/api/admin/clue-game/start/{clueGameId}` | Trigger game start event | Admin |
+| `POST` | `/api/admin/clue-game/final-time/{clueGameId}`| Trigger final guess phase | Admin |
+| `POST` | `/api/admin/clue-game/guess/{guessId}/score`| Score a submitted guess | Admin |
+| `POST` | `/api/admin/clue-game/end/{clueGameId}` | End the clue game | Admin |
 
-### application.properties
-
-```properties
-spring.datasource.url=jdbc:postgresql://localhost:5432/murdergame
-spring.datasource.username=postgres
-spring.datasource.password=yourpassword
-
-spring.jpa.hibernate.ddl-auto=update
-spring.jpa.show-sql=true
-
-app.jwt.secret=your-secret-key
-app.jwt.access-expiration-hours=8
-
-server.servlet.encoding.charset=UTF-8
-server.servlet.encoding.enabled=true
-server.servlet.encoding.force=true
-```
-
-### Başlatma
-
-```bash
-mvn spring-boot:run
-```
-
----
-
-## REST API
-
-### Auth
-
-| Method | Endpoint | Açıklama | Auth |
-|--------|----------|----------|------|
-| POST | `/api/auth/user/register` | Kullanıcı kaydı | - |
-| POST | `/api/auth/user/login` | Kullanıcı girişi | - |
-| POST | `/api/auth/admin/login` | Admin girişi | - |
-
-**Register:**
-```json
-{ "username": "ahmet" }
-```
-
-**User Login:**
-```json
-{
-  "teamNo": "TAKIM_A",
-  "teamPassword": "sifre123",
-  "username": "ahmet"
-}
-```
-
-**Admin Login:**
-```json
-{
-  "username": "admin",
-  "password": "admin123"
-}
-```
-
-**Response (tüm auth endpoint'leri):**
-```json
-{
-  "accessToken": "eyJ...",
-  "role": "USER",
-  "userId": 1,
-  "teamId": 2,
-  "username": "ahmet"
-}
-```
+### 🏆 Leaderboard & Results
+| Method | Endpoint | Description | Access |
+|--------|----------|-------------|--------|
+| `GET`  | `/api/leaderboard` | Get current total scores | Auth |
+| `GET`  | `/api/results/all` | Get full detailed final results | Auth |
+| `GET`  | `/api/results/quiz1/{teamId}` | Get filtered Quiz 1 stats | Auth |
+| `GET`  | `/api/results/quiz2/{teamId}` | Get filtered Quiz 2 (Bet) stats | Auth |
 
 ---
 
-### Takım
+## 📡 WebSocket Channels Overview (STOMP)
 
-| Method | Endpoint | Açıklama | Auth |
-|--------|----------|----------|------|
-| POST | `/api/team/admin/create` | Takım oluştur | ADMIN |
-| GET | `/api/team/admin/all` | Tüm takımlar | ADMIN |
-| POST | `/api/team/admin/add-user/{teamId}` | Kullanıcıyı takıma ekle | ADMIN |
-| POST | `/api/team/admin/remove-user/{userId}` | Kullanıcıyı takımdan çıkar | ADMIN |
-| POST | `/api/team/join` | Takıma katıl | USER |
+Connection Endpoint: `/ws` (Secured via JWT Channel Interceptor)
 
-**Takıma katıl:**
-```json
-{
-  "teamNo": "TAKIM_A",
-  "teamPassword": "sifre123",
-  "username": "ahmet"
-}
-```
+### 📥 Subscriptions (Listen to these channels)
+* **Quiz & Game Room:**
+    * `/topic/room/{roomId}/state` - Triggered when game phase changes.
+    * `/topic/room/{roomId}/question` - Pushes question details & starts 60s timer.
+    * `/topic/room/{roomId}/question-result` - Pushes correct answer when time is up.
+    * `/topic/room/{roomId}/leaderboard` - Live updates of scores.
+* **Clue Game:**
+    * `/topic/clue-game/start` / `/final-time` / `/end` - Phase transitions.
+    * `/topic/clue-game/{teamId}/guesses` - Echoes team guesses.
+    * `/topic/clue-game/{teamId}/score` - Pushes admin score decisions.
 
----
+### 📤 Destinations (Send messages here)
+* **Quiz:**
+    * `/app/quiz/{roomId}/answer` - Submit answer and bet amount (Spokesperson only).
+    * `/app/quiz/{roomId}/next-question` - Start next question (Admin only).
+* **Clue Game:**
+    * `/app/clue-guess` - Submit a killer guess (Spokesperson only).
+    * `/app/final-answer` - Submit the final narrative answer (Spokesperson only).
 
-### Oyun Odası
+**Client Subscriptions (Listening):**
+* `/topic/room/{roomId}/state` -> Game room state changes.
+* `/topic/room/{roomId}/question` -> Incoming questions.
+* `/topic/room/{roomId}/question-result` -> Correct answers when time is up.
+* `/topic/room/{roomId}/leaderboard` -> Real-time scoreboard updates.
+* `/topic/clue-game/...` -> Clue game events (start, final-time, score updates).
 
-| Method | Endpoint | Açıklama | Auth |
-|--------|----------|----------|------|
-| POST | `/api/admin/game-room` | Oda oluştur | ADMIN |
-| GET | `/api/admin/game-room` | Tüm odalar | ADMIN |
-| GET | `/api/admin/game-room/{id}` | Oda detayı | ADMIN |
-| PUT | `/api/admin/game-room/{id}/state` | State güncelle | ADMIN |
-| POST | `/api/admin/game-room/{id}/teams` | Takımları odaya ekle | ADMIN |
+**Client Destinations (Sending):**
+* `/app/quiz/{roomId}/answer` -> Submit quiz answer.
+* `/app/clue-guess` -> Submit clue game guess.
 
-**State güncelle:**
-```json
-{ "state": "QUIZ1" }
-```
-
-State değerleri: `WAITING` `QUIZ1` `QUIZ1_ENDED` `QUIZ2` `QUIZ2_ENDED` `CLUEGAME` `CLUEGAME_FINAL` `CLUEGAME_ENDED` `ENDED`
-
----
-
-### Quiz
-
-| Method | Endpoint | Açıklama | Auth |
-|--------|----------|----------|------|
-| POST | `/api/quiz/room/{gameRoomId}/questions` | Soru ekle | ADMIN |
-| GET | `/api/quiz/room/{gameRoomId}/questions` | Soruları listele | USER |
-| GET | `/api/quiz/room/{gameRoomId}/answers` | Cevapları listele | ADMIN |
-
-**Soru ekle:**
-```json
-{
-  "question": "Türkiye'nin başkenti neresidir?",
-  "optionA": "İstanbul",
-  "optionB": "Ankara",
-  "optionC": "İzmir",
-  "optionD": "Bursa",
-  "correctAnswer": "B",
-  "points": 10
-}
-```
-
----
-
-### Katil Kim (Admin)
-
-| Method | Endpoint | Açıklama | Auth |
-|--------|----------|----------|------|
-| POST | `/api/admin/clue-game/start/{clueGameId}` | Oyunu başlat | ADMIN |
-| POST | `/api/admin/clue-game/final-time/{clueGameId}` | Final zamanı | ADMIN |
-| POST | `/api/admin/clue-game/end/{clueGameId}` | Oyunu bitir | ADMIN |
-| POST | `/api/admin/clue-game/guess/{guessId}/score` | Tahmini puanla | ADMIN |
-| POST | `/api/admin/clue-game/extend-time/{roomId}` | Süre uzat | ADMIN |
-
-**Tahmini puanla:**
-```json
-{ "score": 100 }
-```
-Geçerli değerler: `0`, `50`, `100`
-
-**Süre uzat:**
-```json
-{ "minutes": 5 }
-```
-
----
-
-### Leaderboard
-
-| Method | Endpoint | Açıklama | Auth |
-|--------|----------|----------|------|
-| GET | `/api/leaderboard` | Tüm takım sıralaması | - |
-| GET | `/api/leaderboard/{teamId}` | Takım puanı | - |
-
----
-
-## WebSocket API
-
-### Bağlantı
-
-```
-URL:    ws://localhost:8080/ws
-Header: Authorization: Bearer {token}
-```
-
-SockJS + STOMP protokolü kullanılır.
-
-```javascript
-const socket = new SockJS('http://localhost:8080/ws');
-const client = Stomp.over(socket);
-
-client.connect(
-  { Authorization: 'Bearer ' + token },
-  () => {
-    // bağlandı, subscribe olunabilir
-  }
-);
-```
-
----
-
-### Quiz1 ve Quiz2
-
-#### Subscribe (dinlenecek kanallar)
-
-| Kanal | Açıklama | Tetikleyen |
-|-------|----------|------------|
-| `/topic/room/{roomId}/question` | Yeni soru broadcast | Admin next-question gönderince |
-| `/topic/room/{roomId}/question-result` | Doğru cevap broadcast | Admin end-question gönderince |
-| `/topic/room/{roomId}/leaderboard` | Güncel sıralama | Her doğru cevap sonrası |
-| `/topic/room/{roomId}/state` | Oda state değişimi | Admin state güncellediğinde |
-
-**Soru payload örneği:**
-```json
-{
-  "questionId": 1,
-  "questionIndex": 0,
-  "questionText": "Türkiye'nin başkenti?",
-  "optionA": "İstanbul",
-  "optionB": "Ankara",
-  "optionC": "İzmir",
-  "optionD": "Bursa",
-  "points": 10,
-  "durationSeconds": 60
-}
-```
-
-#### Send (gönderilecek mesajlar)
-
-| Destination | Açıklama | Kim gönderir |
-|-------------|----------|--------------|
-| `/app/quiz/{roomId}/next-question` | Sonraki soruya geç | Admin |
-| `/app/quiz/{roomId}/end-question` | Soruyu bitir | Admin |
-| `/app/quiz/{roomId}/answer` | Cevap gönder | User |
-
-**Cevap payload (Quiz1):**
-```json
-{
-  "questionId": 1,
-  "selectedAnswer": "B"
-}
-```
-
-**Cevap payload (Quiz2 — betAmount ekstra):**
-```json
-{
-  "questionId": 1,
-  "selectedAnswer": "B",
-  "betAmount": 75
-}
-```
-
-Quiz2'de `betAmount` 0-100 arası. Doğruysa o kadar puan kazanır, yanlışsa o kadar kaybeder.
-
----
-
-### Katil Kim (ClueGame)
-
-#### Subscribe
-
-| Kanal | Açıklama |
-|-------|----------|
-| `/topic/clue-game/start` | Oyun başladı |
-| `/topic/clue-game/final-time` | Final cevap zamanı geldi |
-| `/topic/clue-game/end` | Oyun bitti |
-| `/topic/clue-game/{teamId}/guesses` | Takımın tahmin sonucu |
-| `/topic/clue-game/{teamId}/score` | Admin tarafından verilen puan |
-| `/topic/clue-game/{teamId}/final` | Final cevap sonucu |
-| `/topic/clue-game/admin/guesses` | Admin ekranı — gelen tahminler |
-| `/topic/clue-game/admin/scored` | Admin ekranı — puanlanan tahminler |
-| `/topic/room/{roomId}/time-extended` | Süre uzatıldı |
-
-#### Send
-
-| Destination | Açıklama | Kim gönderir |
-|-------------|----------|--------------|
-| `/app/clue-guess` | İpucu tahmini gönder | User |
-| `/app/final-answer` | Final cevap gönder | User |
-
-**İpucu tahmini:**
-```json
-{
-  "clueGameId": 1,
-  "teamId": 2,
-  "guessedName": "Ahmet Yılmaz"
-}
-```
-
-**Final cevap:**
-```json
-{
-  "clueGameId": 1,
-  "teamId": 2,
-  "finalGuess": "Ahmet Yılmaz"
-}
-```
-
----
-
-## Etkinlik Günü Akışı
-
-```
-1. Admin soruları DB'ye girer (POST /api/quiz/room/{id}/questions)
-2. Admin takımları oluşturur (POST /api/team/admin/create)
-3. Admin odayı oluşturur ve takımları ekler
-4. Kullanıcılar kayıt olur → takıma katılır
-5. Admin state'i QUIZ1 yapar → herkes quiz ekranına geçer
-6. Admin next-question gönderir → soru tüm ekranlara düşer
-7. Kullanıcılar 60 saniye içinde cevaplar
-8. Admin end-question gönderir → doğru cevap görünür
-9. Tüm sorular bittikten sonra QUIZ1_ENDED → QUIZ2 → ...
-10. CLUEGAME state'inde ipuçları açılır, takımlar tahmin gönderir
-11. Admin tahminleri değerlendirir (0/50/100 puan)
-12. CLUEGAME_FINAL'da final cevap alınır
-13. ENDED → genel sıralama gösterilir
-```
-
----
-
-## Test
-
-WebSocket testleri için `/test.html` sayfası mevcuttur:
-
-```
-http://localhost:8080/test.html
-```
-
----
-
-## Güvenlik Notları
-
-- JWT secret'ı `application.properties`'te sakla, Git'e commit etme
-- Admin token'ı yalnızca admin panelinde kullan
-- `next-question` endpoint'i role kontrolü yapar, sadece ADMIN rolü gönderebilir
+## ⚙️ Core Modules
+* `auth`: Login, registration, and JWT generation.
+* `game`: Game Room (Session) state management.
+* `quiz`: Question management and WebSocket Quiz Controller.
+* `cluegame`: Murder mystery entity and event handlers.
+* `team`: Team creation and Spokesperson assignment.
+* `results`: Complex data aggregation for end-of-game statistics.
