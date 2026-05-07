@@ -27,13 +27,11 @@ public class GameRoomController {
     }
 
     @GetMapping("/{roomId}")
-    @PreAuthorize("hasRole('ADMIN')")
     public GameRoom getGameRoom(@PathVariable Long roomId) {
         return gameRoomService.getGameRoom(roomId);
     }
 
     @GetMapping("/admin/all")
-    @PreAuthorize("hasRole('ADMIN')")
     public List<GameRoomResponse> getAllGameRooms() {
         return gameRoomService.getAllGameRooms();
     }
@@ -66,5 +64,13 @@ public class GameRoomController {
     @PreAuthorize("hasRole('ADMIN')")
     public void removeTeamFromGameRoom(@PathVariable Long roomId, @PathVariable Long teamId) {
         gameRoomService.removeTeamFromGameRoom(roomId, teamId);
+    }
+
+    // YENİ EKLENEN ENDPOINT
+    @DeleteMapping("/{roomId}")
+    @PreAuthorize("hasRole('ADMIN')")
+    @ResponseStatus(HttpStatus.OK)
+    public void deleteGameRoom(@PathVariable Long roomId) {
+        gameRoomService.deleteGameRoom(roomId);
     }
 }

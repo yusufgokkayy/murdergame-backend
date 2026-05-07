@@ -119,6 +119,25 @@ public class GameRoomServiceImpl implements GameRoomService {
         teamRepository.saveAll(teams);
     }
 
+    // ...
+    @Override
+    public void deleteGameRoom(Long roomId) {
+        GameRoom gameRoom = getGameRoom(roomId); // Bu metod zaten sadece aktif odaları bulur
+
+        // 1. Önce takımları bu odadan çıkaralım (Takımlar tamamen silinmesin diye)
+        List<Team> teams = gameRoom.getTeams();
+        if (teams != null && !teams.isEmpty()) {
+            teams.forEach(team -> team.setGameRoom(null));
+            teamRepository.saveAll(teams);
+        }
+
+        // 2. Odayı pasife çek (Soft Delete)
+        // Böylece geçmiş veriler patlamaz ama oda listesinde (all) bir daha görünmez.
+        gameRoom.setActive(false);
+        gameRoomRepository.save(gameRoom);
+    }
+// ...
+
     private GameRoomResponse toResponse(GameRoom gameRoom) {
         return new GameRoomResponse(
                 gameRoom.getId(),

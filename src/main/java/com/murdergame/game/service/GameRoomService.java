@@ -16,4 +16,7 @@ public interface GameRoomService {
 
     // ✅ YENİ
     void addTeamsToGameRoom(Long roomId, List<Long> teamIds);
+
+    // YENİ EKLENEN
+    void deleteGameRoom(Long roomId);
 }

@@ -53,6 +53,7 @@ public class SecurityConfig {
                                 "/api/quiz/room/**",    // <-- BURAYI DEĞİŞTİR (tek * yerine **)
                                 "/api/quiz/question/**",
                                 "/api/leaderboard/**",// <-- BUNU DA EKLE (belirli bir soruyu getirme de public olsun)
+                                "/api/game-room/**",
                                 "/test.html",
                                 "/quiz.html",
                                 "/css/**",
