@@ -5,6 +5,7 @@ import com.murdergame.auth.service.AuthService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -31,11 +32,4 @@ public class AuthController {
     public AuthResponse userRegister(@RequestBody UserRegisterRequest request) {
         return authService.userRegister(request);
     }
-
-    @GetMapping("/users")
-    public ResponseEntity<List<UserResponse>> getAllUsers() {
-        return ResponseEntity.ok(authService.getAllUsers());
-    }
-
-    // /refresh endpoint SİL
 }

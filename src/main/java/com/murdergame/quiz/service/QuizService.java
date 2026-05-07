@@ -26,4 +26,6 @@ public interface QuizService {
 
     // Takımın cevaplarını getir
     List<QuizAnswer> getTeamAnswers(Long gameRoomId, Long teamId);
+
+    void deleteQuestion(Long questionId);
 }

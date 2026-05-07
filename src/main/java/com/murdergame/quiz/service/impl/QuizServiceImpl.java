@@ -84,6 +84,16 @@ public class QuizServiceImpl implements QuizService {
         return quizAnswerRepository.findByGameRoomIdAndTeamId(gameRoomId, teamId);
     }
 
+    @Override
+    public void deleteQuestion(Long questionId) {
+
+        Question question = questionRepository.findById(questionId)
+                .orElseThrow(() ->
+                        new RuntimeException("Soru bulunamadı: " + questionId));
+
+        questionRepository.delete(question);
+    }
+
     // Helper method: Question entity'yi QuestionResponse'a dönüştür
     private QuestionResponse mapToQuestionResponse(Question question) {
         return new QuestionResponse(

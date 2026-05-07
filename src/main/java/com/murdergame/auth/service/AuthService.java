@@ -10,4 +10,7 @@ public interface AuthService {
     AuthResponse userRegister(UserRegisterRequest request);
     // refresh() METHOD SİL
     List<UserResponse> getAllUsers();
+
+    void deleteUser(Long userId);
+
 }

@@ -77,6 +77,16 @@ public class AuthServiceImpl implements AuthService {
     }
 
     @Override
+    public void deleteUser(Long userId) {
+
+        User user = userRepository.findById(userId)
+                .orElseThrow(() ->
+                        new RuntimeException("Kullanıcı bulunamadı: " + userId));
+
+        userRepository.delete(user);
+    }
+
+    @Override
     @Transactional
     public AuthResponse userRegister(UserRegisterRequest request) {
         String validationError = usernameValidator.getValidationError(request.username());

@@ -62,6 +62,16 @@ public class QuizController {
         return quizService.getGameRoomAnswers(gameRoomId);
     }
 
+    @DeleteMapping("/questions/{questionId}")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<String> deleteQuestion(
+            @PathVariable Long questionId) {
+
+        quizService.deleteQuestion(questionId);
+
+        return ResponseEntity.ok("Soru silindi.");
+    }
+
     // Admin: Takımın cevaplarını getir
     @GetMapping("/room/{gameRoomId}/team/{teamId}/answers")
     @PreAuthorize("hasRole('ADMIN')")
