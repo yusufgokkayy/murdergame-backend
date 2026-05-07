@@ -17,11 +17,6 @@ public class AdminController {
 
     private final AuthService authService;
 
-    @GetMapping("/users")
-    public ResponseEntity<List<UserResponse>> getAllUsers() {
-        return ResponseEntity.ok(authService.getAllUsers());
-    }
-
     @DeleteMapping("/users/{userId}")
     public ResponseEntity<String> deleteUser(@PathVariable Long userId) {
         authService.deleteUser(userId);

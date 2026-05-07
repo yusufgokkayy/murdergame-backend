@@ -32,4 +32,10 @@ public class AuthController {
     public AuthResponse userRegister(@RequestBody UserRegisterRequest request) {
         return authService.userRegister(request);
     }
+
+    @GetMapping("/users")
+    public ResponseEntity<List<UserResponse>> getAllUsers() {
+        return ResponseEntity.ok(authService.getAllUsers());
+    }
+
 }

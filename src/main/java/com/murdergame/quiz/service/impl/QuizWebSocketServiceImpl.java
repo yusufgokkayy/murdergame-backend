@@ -24,6 +24,11 @@ import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 @Service
 @RequiredArgsConstructor
@@ -39,10 +44,23 @@ public class QuizWebSocketServiceImpl implements QuizWebSocketService {
 
     private static final int QUESTION_DURATION_SECONDS = 60;
 
+    // --- YENİ: Backend timer için Scheduler ve oda bazlı sayaçları tutacağımız Map ---
+    private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(5);
+    private final Map<Long, ScheduledFuture<?>> roomTimers = new ConcurrentHashMap<>();
+    // ---------------------------------------------------------------------------------
+
     @Transactional
     public void broadcastNextQuestion(Long roomId, Long adminId) {
         GameRoom room = gameRoomRepository.findById(roomId)
                 .orElseThrow(() -> new RuntimeException("Room not found"));
+
+        // --- YENİ GÜVENLİK: Admin butona çift tıklarsa veya yanlışlıkla tekrar basarsa önceki sayacı iptal et ---
+        ScheduledFuture<?> existingTimer = roomTimers.get(roomId);
+        if (existingTimer != null && !existingTimer.isDone()) {
+            existingTimer.cancel(false);
+            System.out.println("=== ÖNCEKİ SAYAÇ İPTAL EDİLDİ (Yeni soruya geçildi) ===");
+        }
+        // ----------------------------------------------------------------------------------------------------
 
         // Sonraki index'e geç
         int nextIndex = (room.getCurrentQuestionIndex() == null)
@@ -55,10 +73,7 @@ public class QuizWebSocketServiceImpl implements QuizWebSocketService {
 
         System.out.println("=== broadcastNextQuestion roomId: " + roomId + " nextIndex: " + nextIndex + " questions size: " + questions.size() + " ===");
 
-
         if (nextIndex >= questions.size()) {
-
-            // ✅ YENİ — state'i DB'de güncelle
             room.setState(GameRoomState.QUIZ1_ENDED);
             gameRoomRepository.save(room);
 
@@ -67,14 +82,12 @@ public class QuizWebSocketServiceImpl implements QuizWebSocketService {
                     Map.of("event", "QUIZ_FINISHED")
             );
 
-            // ✅ YENİ — state değişimini de ayrıca broadcast et (opsiyonel ama temiz)
             messagingTemplate.convertAndSend(
                     "/topic/room/" + roomId + "/state",
                     "QUIZ1_ENDED"
             );
             return;
         }
-
 
         Question question = questions.get(nextIndex);
 
@@ -100,6 +113,21 @@ public class QuizWebSocketServiceImpl implements QuizWebSocketService {
         messagingTemplate.convertAndSend(
                 "/topic/room/" + roomId + "/question", dto
         );
+
+        // --- YENİ: 60 saniye sonrasına timer kur. Süre bitince otomatik endCurrentQuestion çalışsın! ---
+        ScheduledFuture<?> newTimer = scheduler.schedule(() -> {
+            try {
+                System.out.println("=== SÜRE DOLDU! OTOMATİK OLARAK SORU BİTİRİLİYOR (Room: " + roomId + ") ===");
+                // Zamanlayıcı thread içinde olduğu için transaction proxy'sini kendi üzerinden tetiklemek adına metodu direkt çağırıyoruz
+                endCurrentQuestion(roomId);
+            } catch (Exception e) {
+                System.err.println("Otomatik soru bitirme sırasında hata: " + e.getMessage());
+            }
+        }, QUESTION_DURATION_SECONDS, TimeUnit.SECONDS);
+
+        // Timer'ı haritaya kaydet
+        roomTimers.put(roomId, newTimer);
+        // ---------------------------------------------------------------------------------------------
     }
 
     @Transactional
@@ -111,13 +139,11 @@ public class QuizWebSocketServiceImpl implements QuizWebSocketService {
         if (userId == null) { System.out.println("=== NULL userId ==="); return; }
 
         GameRoom room = gameRoomRepository.findById(roomId).orElseThrow();
-        System.out.println("=== room currentQuestionId: " + room.getCurrentQuestionId() + " ===");
 
         if (room.getQuestionStartedAt() == null) { System.out.println("=== questionStartedAt null ==="); return; }
 
         long elapsed = ChronoUnit.SECONDS.between(room.getQuestionStartedAt(), LocalDateTime.now());
-        System.out.println("=== elapsed: " + elapsed + " ===");
-        if (elapsed > QUESTION_DURATION_SECONDS) { System.out.println("=== SURE DOLDU ==="); return; }
+        if (elapsed > QUESTION_DURATION_SECONDS) { System.out.println("=== SURE DOLDU (Sunucu Zamanı) ==="); return; }
 
         if (!request.questionId().equals(room.getCurrentQuestionId())) {
             System.out.println("=== QUESTION ID MISMATCH: request=" + request.questionId() + " current=" + room.getCurrentQuestionId() + " ===");
@@ -125,17 +151,19 @@ public class QuizWebSocketServiceImpl implements QuizWebSocketService {
         }
 
         User user = userRepository.findById(userId).orElseThrow();
-        System.out.println("=== user team: " + user.getTeam() + " ===");
-
         Team team = user.getTeam();
         if (team == null) { System.out.println("=== TEAM NULL ==="); return; }
 
+        // --- YENİ: SÖZCÜ KONTROLÜ ---
+        if (team.getSpokespersonId() == null || !team.getSpokespersonId().equals(userId)) {
+            System.out.println("=== YETKİSİZ CEVAP: Sadece takım sözcüsü cevap verebilir. (UserId: " + userId + ") ===");
+            return; // Sözcü değilse işlemi sonlandır
+        }
+        // ----------------------------
+
         Question question = questionRepository.findById(request.questionId()).orElseThrow();
         boolean alreadyAnswered = quizAnswerRepository.existsByTeamAndQuestion(team, question);
-        System.out.println("=== alreadyAnswered: " + alreadyAnswered + " ===");
         if (alreadyAnswered) { System.out.println("=== ZATEN CEVAPLANDI ==="); return; }
-
-        System.out.println("=== KAYIT YAPILIYOR ===");
 
         boolean isCorrect = question.getCorrectAnswer()
                 .equalsIgnoreCase(request.selectedAnswer());
@@ -166,7 +194,6 @@ public class QuizWebSocketServiceImpl implements QuizWebSocketService {
 
         System.out.println("=== ANSWER SAVED, calling leaderboard ===");
         var leaderboard = leaderboardService.getLeaderboard();
-        System.out.println("=== LEADERBOARD: " + leaderboard +" ===");
         messagingTemplate.convertAndSend(
                 "/topic/room/" + roomId + "/leaderboard", leaderboard
         );
@@ -175,22 +202,27 @@ public class QuizWebSocketServiceImpl implements QuizWebSocketService {
 
     @Transactional
     public void endCurrentQuestion(Long roomId) {
-        GameRoom room = gameRoomRepository.findById(roomId)
-                .orElseThrow();
+        // İşlem bittiğinde temizlik yap
+        roomTimers.remove(roomId);
+
+        GameRoom room = gameRoomRepository.findById(roomId).orElse(null);
+        if (room == null) return;
 
         // Doğru cevabı broadcast et
         if (room.getCurrentQuestionId() != null) {
             Question q = questionRepository
-                    .findById(room.getCurrentQuestionId()).orElseThrow();
+                    .findById(room.getCurrentQuestionId()).orElse(null);
 
-            messagingTemplate.convertAndSend(
-                    "/topic/room/" + roomId + "/question-result",
-                    Map.of(
-                            "event", "QUESTION_ENDED",
-                            "correctAnswer", q.getCorrectAnswer(),
-                            "questionId", q.getId()
-                    )
-            );
+            if (q != null) {
+                messagingTemplate.convertAndSend(
+                        "/topic/room/" + roomId + "/question-result",
+                        Map.of(
+                                "event", "QUESTION_ENDED",
+                                "correctAnswer", q.getCorrectAnswer(),
+                                "questionId", q.getId()
+                        )
+                );
+            }
         }
     }
 }

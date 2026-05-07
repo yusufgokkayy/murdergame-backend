@@ -27,9 +27,7 @@ public class TeamController {
         return teamService.createTeam(request);
     }
 
-    // Admin: Tüm takımları getir
-    @GetMapping("/admin/all")
-    @PreAuthorize("hasRole('ADMIN')")
+    @GetMapping("/all")
     public List<TeamResponse> getAllTeams() {
         return teamService.getAllTeams();
     }
