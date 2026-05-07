@@ -125,30 +125,30 @@ public class AuthServiceImpl implements AuthService {
     @Override
     @Transactional
     public AuthResponse userLogin(UserLoginRequest request) {
-        Team team = teamRepository.findByTeamNo(request.teamNo())
-                .orElseThrow(() -> new ResourceNotFoundException("Takım bulunamadı"));
+        // Sadece username ile aktif kullanıcıyı bul
+        User user = userRepository.findByUsernameAndActiveTrue(request.username())
+                .orElseThrow(() -> new ResourceNotFoundException("Kullanıcı bulunamadı"));
 
-        if (!passwordEncoder.matches(request.teamPassword(), team.getTeamPasswordHash())) {
-            throw new InvalidCredentialsException("Takım şifresi yanlış");
+        // Kullanıcının takımı varsa ID'sini al, yoksa null kalır
+        Long teamId = (user.getTeam() != null) ? user.getTeam().getId() : null;
+
+        // Map.of null değer kabul etmediği için HashMap kullanıyoruz
+        Map<String, Object> claims = new java.util.HashMap<>();
+        claims.put("role", "USER");
+        claims.put("userId", user.getId());
+        claims.put("username", user.getUsername());
+        if (teamId != null) {
+            claims.put("teamId", teamId);
         }
 
-        User user = userRepository.findByTeamIdAndUsernameAndActiveTrue(team.getId(), request.username())
-                .orElseThrow(() -> new ResourceNotFoundException("Kullanıcı bu takımda bulunamadı"));
-
         String subject = "USER:" + user.getId();
-        String accessToken = jwtService.generateAccessToken(subject, Map.of(
-                "role", "USER",
-                "userId", user.getId(),
-                "teamId", team.getId(),
-                "username", user.getUsername()
-        ));
+        String accessToken = jwtService.generateAccessToken(subject, claims);
 
         return new AuthResponse(
                 accessToken,
-                // refreshToken silinir
                 "USER",
                 user.getId(),
-                team.getId(),
+                teamId,  // Takımı yoksa front-end'e null döner, varsa ID'si döner
                 user.getUsername()
         );
     }

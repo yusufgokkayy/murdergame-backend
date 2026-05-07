@@ -183,6 +183,13 @@ public class TeamServiceImpl implements TeamService {
     }
 
     private TeamResponse toResponse(Team team) {
-        return new TeamResponse(team.getId(), team.getTeamNo(), team.getActive());
+        int memberCount = userRepository.countByTeamId(team.getId());
+
+        return new TeamResponse(
+                team.getId(),
+                team.getTeamNo(),
+                team.getActive(),
+                memberCount   // <-- JSON'a ekle
+        );
     }
 }

@@ -15,8 +15,12 @@ public interface UserRepository extends JpaRepository<User, Long> {
     boolean existsByTeamIdAndUsername(Long teamId, String username);
     Optional<User> findByTeamIdAndUsername(Long teamId, String username);
     Optional<User> findByTeamIdAndUsernameAndActiveTrue(Long teamId, String username);
+    // YENİ EKLENEN METOT
+    Optional<User> findByUsernameAndActiveTrue(String username);
     boolean existsByUsername(String username);  // ← BUNU EKLE
     Optional<User> findByUsername(String username);
+
+    int countByTeamId(Long teamId);
 
     @Modifying
     @Transactional
