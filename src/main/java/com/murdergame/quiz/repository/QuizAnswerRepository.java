@@ -20,4 +20,6 @@ public interface QuizAnswerRepository extends JpaRepository<QuizAnswer, Long> {
     boolean existsByTeamAndQuestion(Team team, Question question);
 
     void deleteByTeamId(Long teamId);
+
+    void deleteByGameRoomId(Long gameRoomId);
 }

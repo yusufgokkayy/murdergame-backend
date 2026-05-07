@@ -15,6 +15,7 @@ import com.murdergame.team.service.TeamService;
 import com.murdergame.user.entity.User;
 import com.murdergame.user.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -30,6 +31,7 @@ public class TeamServiceImpl implements TeamService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final QuizAnswerRepository quizAnswerRepository;
+    private final SimpMessagingTemplate messagingTemplate;
 
     @Override
     public TeamResponse createTeam(CreateTeamRequest request) {
@@ -47,11 +49,20 @@ public class TeamServiceImpl implements TeamService {
     }
 
     @Override
+    @Transactional(readOnly = true)
     public List<TeamResponse> getAllTeams() {
         return teamRepository.findAll()
                 .stream()
                 .map(this::toResponse)
                 .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public TeamResponse getTeamById(Long teamId) {
+        Team team = teamRepository.findById(teamId)
+                .orElseThrow(() -> new ResourceNotFoundException("Takım bulunamadı"));
+        return toResponse(team);
     }
 
     @Override
@@ -90,20 +101,16 @@ public class TeamServiceImpl implements TeamService {
 
     @Override
     public AddUserResponse addUserToTeam(Long teamId, Long userId) {
-        // User var mı?
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new RuntimeException("Kullanıcı bulunamadı"));
 
-        // User zaten bir takımda mı?
         if (user.getTeam() != null) {
             throw new RuntimeException("Kullanıcı zaten bir takımda");
         }
 
-        // Takım var mı?
         Team team = teamRepository.findById(teamId)
                 .orElseThrow(() -> new RuntimeException("Takım bulunamadı"));
 
-        // Admin user'ı takıma ekle
         user.setTeam(team);
         User saved = userRepository.save(user);
 
@@ -139,7 +146,6 @@ public class TeamServiceImpl implements TeamService {
         );
     }
 
-    // YENİ EKLENEN METOT
     @Override
     public AddUserResponse setSpokesperson(Long teamId, Long userId) {
         Team team = teamRepository.findById(teamId)
@@ -156,6 +162,9 @@ public class TeamServiceImpl implements TeamService {
         team.setSpokespersonId(userId);
         Team saved = teamRepository.save(team);
 
+        // YENİ: Sözcü atandığı an takıma canlı bildirim gönder
+        messagingTemplate.convertAndSend("/topic/team/" + teamId + "/spokesperson", userId);
+
         return new AddUserResponse(
                 user.getId(),
                 user.getUsername(),
@@ -166,7 +175,6 @@ public class TeamServiceImpl implements TeamService {
     }
 
     @Override
-    @Transactional
     public void deleteTeam(Long teamId) {
 
         Team team = teamRepository.findById(teamId)
@@ -189,7 +197,8 @@ public class TeamServiceImpl implements TeamService {
                 team.getId(),
                 team.getTeamNo(),
                 team.getActive(),
-                memberCount   // <-- JSON'a ekle
+                memberCount,
+                team.getSpokespersonId()
         );
     }
 }

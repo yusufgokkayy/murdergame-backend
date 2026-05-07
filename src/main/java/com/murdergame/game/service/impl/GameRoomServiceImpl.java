@@ -6,6 +6,7 @@ import com.murdergame.game.entity.GameRoom;
 import com.murdergame.game.entity.GameRoomState;
 import com.murdergame.game.repository.GameRoomRepository;
 import com.murdergame.game.service.GameRoomService;
+import com.murdergame.quiz.repository.QuizAnswerRepository;
 import com.murdergame.team.entity.Team;
 import com.murdergame.team.repository.TeamRepository;
 import com.murdergame.common.exception.ResourceNotFoundException;
@@ -25,6 +26,7 @@ public class GameRoomServiceImpl implements GameRoomService {
     private final GameRoomRepository gameRoomRepository;
     private final TeamRepository teamRepository;
     private final SimpMessagingTemplate messagingTemplate;
+    private final QuizAnswerRepository quizAnswerRepository;
 
     @Override
     public GameRoom createGameRoom() {
@@ -117,6 +119,29 @@ public class GameRoomServiceImpl implements GameRoomService {
         // Tüm takımları odaya ekle
         teams.forEach(team -> team.setGameRoom(gameRoom));
         teamRepository.saveAll(teams);
+    }
+
+    // ODAYI SIFIRLAMA METODU
+    @Override
+    @Transactional
+    public void resetGameRoom(Long roomId) {
+        GameRoom room = getGameRoom(roomId);
+
+        // 1. Odaya ait verilmiş tüm geçmiş cevapları (puanları) sil
+        quizAnswerRepository.deleteByGameRoomId(roomId);
+
+        // 2. Odanın soru sayacını ve durumunu ilk haline getir
+        room.setState(GameRoomState.WAITING);
+        room.setCurrentQuestionId(null);
+        room.setCurrentQuestionIndex(null);
+        room.setQuestionStartedAt(null);
+        room.setStartedAt(null);
+        room.setEndedAt(null);
+
+        gameRoomRepository.save(room);
+
+        // 3. Frontend'e lobinin (WAITING) sıfırlandığını haber ver
+        messagingTemplate.convertAndSend("/topic/room/" + roomId + "/state", "WAITING");
     }
 
     // ...

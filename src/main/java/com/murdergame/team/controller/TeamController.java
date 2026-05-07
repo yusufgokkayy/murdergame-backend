@@ -32,6 +32,11 @@ public class TeamController {
         return teamService.getAllTeams();
     }
 
+    @GetMapping("/{teamId}")
+    public TeamResponse getTeam(@PathVariable Long teamId) {
+        return teamService.getTeamById(teamId);
+    }
+
     // Admin: User'ı takıma ekle (userId ile)
     @PostMapping("/admin/add-user/{teamId}")
     @PreAuthorize("hasRole('ADMIN')")

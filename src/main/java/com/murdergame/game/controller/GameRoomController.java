@@ -66,6 +66,13 @@ public class GameRoomController {
         gameRoomService.removeTeamFromGameRoom(roomId, teamId);
     }
 
+    @PostMapping("/{roomId}/reset")
+    @PreAuthorize("hasRole('ADMIN')")
+    @ResponseStatus(HttpStatus.OK)
+    public void resetGameRoom(@PathVariable Long roomId) {
+        gameRoomService.resetGameRoom(roomId);
+    }
+
     // YENİ EKLENEN ENDPOINT
     @DeleteMapping("/{roomId}")
     @PreAuthorize("hasRole('ADMIN')")

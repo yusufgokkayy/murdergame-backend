@@ -4,5 +4,6 @@ public record TeamResponse(
         Long id,
         String teamNo,
         Boolean active,
-        Integer memberCount
+        Integer memberCount,
+        Long spokespersonId
 ) {}

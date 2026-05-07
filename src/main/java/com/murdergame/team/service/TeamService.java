@@ -23,4 +23,6 @@ public interface TeamService {
     AddUserResponse setSpokesperson(Long teamId, Long userId);
 
     void deleteTeam(Long teamId);
+
+    TeamResponse getTeamById(Long teamId);
 }
