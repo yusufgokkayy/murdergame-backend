@@ -8,6 +8,7 @@ import com.murdergame.cluegame.entity.ClueGameFinalAnswer;
 import com.murdergame.cluegame.repository.ClueGameRepository;
 import com.murdergame.cluegame.repository.ClueGameGuessRepository;
 import com.murdergame.cluegame.repository.ClueGameFinalAnswerRepository;
+import com.murdergame.common.exception.BusinessException;
 import com.murdergame.quiz.repository.QuizAnswerRepository;
 import com.murdergame.team.entity.Team;
 import com.murdergame.team.repository.TeamRepository;
@@ -66,6 +67,11 @@ public class ClueGameServiceImpl implements ClueGameService {
         ClueGame clueGame = clueGameRepository.findByIdAndIsActiveTrue(request.clueGameId())
                 .orElseThrow(() -> new RuntimeException("Oyun bulunamadı"));
 
+        // -------- YENİ: SÖZCÜ KONTROLÜ --------
+//        if (team.getSpokespersonId() == null || !team.getSpokespersonId().equals(userId)) {
+//            throw new BusinessException("Sadece takım sözcüsü tahmin gönderebilir!");
+//        }
+
         // Guess kaydet — puan henüz 0, admin sonra verecek
         ClueGameGuess guess = ClueGameGuess.builder()
                 .clueGame(clueGame)
@@ -98,6 +104,11 @@ public class ClueGameServiceImpl implements ClueGameService {
 
         ClueGame clueGame = clueGameRepository.findByIdAndIsActiveTrue(request.clueGameId())
                 .orElseThrow(() -> new RuntimeException("Oyun bulunamadı"));
+
+        // -------- YENİ: SÖZCÜ KONTROLÜ --------
+//        if (team.getSpokespersonId() == null || !team.getSpokespersonId().equals(userId)) {
+//            throw new BusinessException("Sadece takım sözcüsü final cevabı gönderebilir!");
+//        }
 
         // Final cevap doğru mu?
         boolean isCorrect = clueGame.getKillerName()

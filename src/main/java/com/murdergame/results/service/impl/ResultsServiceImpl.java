@@ -5,7 +5,6 @@ import com.murdergame.results.dto.ResultsResponse;
 import com.murdergame.results.dto.Quiz1DetailResponse;
 import com.murdergame.results.dto.Quiz2DetailResponse;
 import com.murdergame.quiz.repository.QuizAnswerRepository;
-//import com.murdergame.quiz2.repository.Quiz2BetRepository;
 import com.murdergame.team.entity.Team;
 import com.murdergame.team.repository.TeamRepository;
 import lombok.RequiredArgsConstructor;
@@ -21,7 +20,6 @@ public class ResultsServiceImpl implements ResultsService {
 
     private final TeamRepository teamRepository;
     private final QuizAnswerRepository quizAnswerRepository;
-//    private final Quiz2BetRepository quiz2BetRepository;
 
     @Override
     public ResultsResponse getTeamResults(Long teamId) {
@@ -31,6 +29,7 @@ public class ResultsServiceImpl implements ResultsService {
         var quiz1Details = getQuiz1Details(teamId);
         var quiz2Details = getQuiz2Details(teamId);
 
+        // Artık quiz2Details null dönmediği için BURASI ÇÖKMEYECEK!
         int finalPoints = quiz1Details.totalPoints() + quiz2Details.netPoints();
 
         return new ResultsResponse(
@@ -51,11 +50,14 @@ public class ResultsServiceImpl implements ResultsService {
         Team team = teamRepository.findById(teamId)
                 .orElseThrow(() -> new RuntimeException("Takım bulunamadı"));
 
-        var answers = quizAnswerRepository.findByTeamId(teamId);
+        // Takımın tüm cevaplarını çek, sadece bahissiz (betAmount = 0) olanları al
+        var quiz1Answers = quizAnswerRepository.findByTeamId(teamId).stream()
+                .filter(a -> a.getBetAmount() == null || a.getBetAmount() == 0)
+                .toList();
 
-        int correct = (int) answers.stream().filter(a -> a.getIsCorrect()).count();
-        int wrong = (int) answers.stream().filter(a -> !a.getIsCorrect()).count();
-        int totalPoints = answers.stream()
+        int correct = (int) quiz1Answers.stream().filter(a -> a.getIsCorrect()).count();
+        int wrong = (int) quiz1Answers.stream().filter(a -> !a.getIsCorrect()).count();
+        int totalPoints = quiz1Answers.stream()
                 .mapToInt(a -> a.getPointsEarned() != null ? a.getPointsEarned() : 0)
                 .sum();
 
@@ -65,49 +67,47 @@ public class ResultsServiceImpl implements ResultsService {
                 correct,
                 wrong,
                 totalPoints,
-                answers.size()
+                quiz1Answers.size()
         );
     }
 
     @Override
     public Quiz2DetailResponse getQuiz2Details(Long teamId) {
-        return null;
-    }
+        Team team = teamRepository.findById(teamId)
+                .orElseThrow(() -> new RuntimeException("Takım bulunamadı"));
 
-//    @Override
-//    public Quiz2DetailResponse getQuiz2Details(Long teamId) {
-//        Team team = teamRepository.findById(teamId)
-//                .orElseThrow(() -> new RuntimeException("Takım bulunamadı"));
-//
-//        var bets = quiz2BetRepository.findByTeamId(teamId);
-//
-//        int correctBets = (int) bets.stream().filter(b -> b.getIsCorrect()).count();
-//        int wrongBets = (int) bets.stream().filter(b -> !b.getIsCorrect()).count();
-//
-//        int totalGained = bets.stream()
-//                .filter(b -> b.getIsCorrect())
-//                .mapToInt(b -> b.getResultPoints() > 0 ? b.getResultPoints() : 0)
-//                .sum();
-//
-//        int totalLost = bets.stream()
-//                .filter(b -> !b.getIsCorrect())
-//                .mapToInt(b -> b.getResultPoints() < 0 ? Math.abs(b.getResultPoints()) : 0)
-//                .sum();
-//
-//        int netPoints = bets.stream()
-//                .mapToInt(b -> b.getResultPoints() != null ? b.getResultPoints() : 0)
-//                .sum();
-//
-//        return new Quiz2DetailResponse(
-//                teamId,
-//                team.getTeamNo(),
-//                correctBets,
-//                wrongBets,
-//                totalGained,
-//                totalLost,
-//                netPoints
-//        );
-//    }
+        // Takımın tüm cevaplarını çek, sadece bahisli (betAmount > 0) olanları al
+        var bets = quizAnswerRepository.findByTeamId(teamId).stream()
+                .filter(a -> a.getBetAmount() != null && a.getBetAmount() > 0)
+                .toList();
+
+        int correctBets = (int) bets.stream().filter(a -> a.getIsCorrect()).count();
+        int wrongBets = (int) bets.stream().filter(a -> !a.getIsCorrect()).count();
+
+        int totalGained = bets.stream()
+                .filter(a -> a.getIsCorrect())
+                .mapToInt(a -> a.getPointsEarned() > 0 ? a.getPointsEarned() : 0)
+                .sum();
+
+        int totalLost = bets.stream()
+                .filter(a -> !a.getIsCorrect())
+                .mapToInt(a -> a.getPointsEarned() < 0 ? Math.abs(a.getPointsEarned()) : 0)
+                .sum();
+
+        int netPoints = bets.stream()
+                .mapToInt(a -> a.getPointsEarned() != null ? a.getPointsEarned() : 0)
+                .sum();
+
+        return new Quiz2DetailResponse(
+                teamId,
+                team.getTeamNo(),
+                correctBets,
+                wrongBets,
+                totalGained,
+                totalLost,
+                netPoints
+        );
+    }
 
     @Override
     public List<ResultsResponse> getAllResults() {
