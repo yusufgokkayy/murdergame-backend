@@ -68,6 +68,12 @@ public class QuizServiceImpl implements QuizService {
         return mapToQuestionResponse(savedQuestion);
     }
 
+    public List<QuestionResponse> createMultipleQuestions(Long gameRoomId, List<CreateQuestionRequest> requests) {
+        return requests.stream()
+                .map(request -> createQuestion(gameRoomId, request))
+                .toList();
+    }
+
     @Override
     public SubmitAnswerResponse submitAnswer(Long gameRoomId, @RequestParam Long teamId, SubmitAnswerRequest request) {
         // İmplementasyon burada

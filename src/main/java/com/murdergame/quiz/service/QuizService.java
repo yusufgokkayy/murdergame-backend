@@ -28,4 +28,6 @@ public interface QuizService {
     List<QuizAnswer> getTeamAnswers(Long gameRoomId, Long teamId);
 
     void deleteQuestion(Long questionId);
+
+    List<QuestionResponse> createMultipleQuestions(Long gameRoomId, List<CreateQuestionRequest> requests);
 }

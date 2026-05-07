@@ -45,6 +45,15 @@ public class QuizController {
         return ResponseEntity.created(location).body(response);
     }
 
+    @PostMapping("/room/{gameRoomId}/questions/multiple")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<List<QuestionResponse>> createMultipleQuestions(
+            @PathVariable Long gameRoomId,
+            @RequestBody List<CreateQuestionRequest> requests) {
+        List<QuestionResponse> responses = quizService.createMultipleQuestions(gameRoomId, requests);
+        return ResponseEntity.ok(responses);
+    }
+
     // User: Cevap gönder
 //    @PostMapping("/room/{gameRoomId}/submit")
 //    @PreAuthorize("hasRole('USER')")
