@@ -63,14 +63,24 @@ public class QuizWebSocketServiceImpl implements QuizWebSocketService {
         // ----------------------------------------------------------------------------------------------------
 
         // Sonraki index'e geç
-        int nextIndex = (room.getCurrentQuestionIndex() == null)
-                ? 0
-                : room.getCurrentQuestionIndex() + 1;
-
-        // Soruları id'ye göre sıralı çek
+        // Soruları id'ye göre sıralı çek (sadece aktif olanlar)
         List<Question> questions = questionRepository
-                .findByGameRoomIdOrderByIdAsc(roomId);
+                .findByGameRoomIdAndActiveTrueOrderByIdAsc(roomId);
 
+// currentQuestionId'ye göre gerçek pozisyonu bul
+        int nextIndex;
+        if (room.getCurrentQuestionId() == null) {
+            nextIndex = 0;
+        } else {
+            int currentPos = -1;
+            for (int i = 0; i < questions.size(); i++) {
+                if (questions.get(i).getId().equals(room.getCurrentQuestionId())) {
+                    currentPos = i;
+                    break;
+                }
+            }
+            nextIndex = currentPos + 1;
+        }
         System.out.println("=== broadcastNextQuestion roomId: " + roomId + " nextIndex: " + nextIndex + " questions size: " + questions.size() + " ===");
 
         if (nextIndex >= questions.size()) {

@@ -32,4 +32,6 @@ public interface QuestionRepository extends JpaRepository<Question, Long> {
     void deactivateByGameRoomId(@Param("gameRoomId") Long gameRoomId);
 
     List<Question> findByGameRoomIdAndActiveTrue(Long gameRoomId);
+
+    List<Question> findByGameRoomIdAndActiveTrueOrderByIdAsc(Long roomId);
 }
