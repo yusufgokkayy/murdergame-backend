@@ -20,4 +20,6 @@ public interface GameRoomService {
     void resetGameRoom(Long roomId);
     // YENİ EKLENEN
     void deleteGameRoom(Long roomId);
+
+    void resetGameRoomQuestionsOnly(Long roomId);
 }

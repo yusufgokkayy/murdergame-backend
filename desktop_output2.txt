@@ -105,8 +105,6 @@ package com.murdergame.auth.dto;
 import jakarta.validation.constraints.NotBlank;
 
 public record UserLoginRequest(
-        @NotBlank String teamNo,
-        @NotBlank String teamPassword,
         @NotBlank String username
 ) {}
 === UserRegisterRequest.java ===
@@ -313,30 +311,30 @@ public class AuthServiceImpl implements AuthService {
     @Override
     @Transactional
     public AuthResponse userLogin(UserLoginRequest request) {
-        Team team = teamRepository.findByTeamNo(request.teamNo())
-                .orElseThrow(() -> new ResourceNotFoundException("TakÄ±m bulunamadÄ±"));
+        // Sadece username ile aktif kullanÄ±cÄ±yÄ± bul
+        User user = userRepository.findByUsernameAndActiveTrue(request.username())
+                .orElseThrow(() -> new ResourceNotFoundException("KullanÄ±cÄ± bulunamadÄ±"));
 
-        if (!passwordEncoder.matches(request.teamPassword(), team.getTeamPasswordHash())) {
-            throw new InvalidCredentialsException("TakÄ±m ÅŸifresi yanlÄ±ÅŸ");
+        // KullanÄ±cÄ±nÄ±n takÄ±mÄ± varsa ID'sini al, yoksa null kalÄ±r
+        Long teamId = (user.getTeam() != null) ? user.getTeam().getId() : null;
+
+        // Map.of null deÄŸer kabul etmediÄŸi iÃ§in HashMap kullanÄ±yoruz
+        Map<String, Object> claims = new java.util.HashMap<>();
+        claims.put("role", "USER");
+        claims.put("userId", user.getId());
+        claims.put("username", user.getUsername());
+        if (teamId != null) {
+            claims.put("teamId", teamId);
         }
 
-        User user = userRepository.findByTeamIdAndUsernameAndActiveTrue(team.getId(), request.username())
-                .orElseThrow(() -> new ResourceNotFoundException("KullanÄ±cÄ± bu takÄ±mda bulunamadÄ±"));
-
         String subject = "USER:" + user.getId();
-        String accessToken = jwtService.generateAccessToken(subject, Map.of(
-                "role", "USER",
-                "userId", user.getId(),
-                "teamId", team.getId(),
-                "username", user.getUsername()
-        ));
+        String accessToken = jwtService.generateAccessToken(subject, claims);
 
         return new AuthResponse(
                 accessToken,
-                // refreshToken silinir
                 "USER",
                 user.getId(),
-                team.getId(),
+                teamId,  // TakÄ±mÄ± yoksa front-end'e null dÃ¶ner, varsa ID'si dÃ¶ner
                 user.getUsername()
         );
     }
@@ -976,7 +974,9 @@ public class SecurityConfig {
                                 "/api/auth/**",
                                 "/api/team/all",
                                 "/api/quiz/room/**",    // <-- BURAYI DEÄÄ°ÅTÄ°R (tek * yerine **)
-                                "/api/quiz/question/**", // <-- BUNU DA EKLE (belirli bir soruyu getirme de public olsun)
+                                "/api/quiz/question/**",
+                                "/api/leaderboard/**",// <-- BUNU DA EKLE (belirli bir soruyu getirme de public olsun)
+                                "/api/game-room/**",
                                 "/test.html",
                                 "/quiz.html",
                                 "/css/**",
@@ -1297,13 +1297,11 @@ public class GameRoomController {
     }
 
     @GetMapping("/{roomId}")
-    @PreAuthorize("hasRole('ADMIN')")
     public GameRoom getGameRoom(@PathVariable Long roomId) {
         return gameRoomService.getGameRoom(roomId);
     }
 
     @GetMapping("/admin/all")
-    @PreAuthorize("hasRole('ADMIN')")
     public List<GameRoomResponse> getAllGameRooms() {
         return gameRoomService.getAllGameRooms();
     }
@@ -1336,6 +1334,21 @@ public class GameRoomController {
     @PreAuthorize("hasRole('ADMIN')")
     public void removeTeamFromGameRoom(@PathVariable Long roomId, @PathVariable Long teamId) {
         gameRoomService.removeTeamFromGameRoom(roomId, teamId);
+    }
+
+    @PostMapping("/{roomId}/reset")
+    @PreAuthorize("hasRole('ADMIN')")
+    @ResponseStatus(HttpStatus.OK)
+    public void resetGameRoom(@PathVariable Long roomId) {
+        gameRoomService.resetGameRoom(roomId);
+    }
+
+    // YENÄ° EKLENEN ENDPOINT
+    @DeleteMapping("/{roomId}")
+    @PreAuthorize("hasRole('ADMIN')")
+    @ResponseStatus(HttpStatus.OK)
+    public void deleteGameRoom(@PathVariable Long roomId) {
+        gameRoomService.deleteGameRoom(roomId);
     }
 }
 === AddTeamsToGameRoomRequest.java ===
@@ -1467,6 +1480,10 @@ public interface GameRoomService {
 
     // âœ… YENÄ°
     void addTeamsToGameRoom(Long roomId, List<Long> teamIds);
+
+    void resetGameRoom(Long roomId);
+    // YENÄ° EKLENEN
+    void deleteGameRoom(Long roomId);
 }
 === GameRoomServiceImpl.java ===
 package com.murdergame.game.service.impl;
@@ -1477,6 +1494,7 @@ import com.murdergame.game.entity.GameRoom;
 import com.murdergame.game.entity.GameRoomState;
 import com.murdergame.game.repository.GameRoomRepository;
 import com.murdergame.game.service.GameRoomService;
+import com.murdergame.quiz.repository.QuizAnswerRepository;
 import com.murdergame.team.entity.Team;
 import com.murdergame.team.repository.TeamRepository;
 import com.murdergame.common.exception.ResourceNotFoundException;
@@ -1496,6 +1514,7 @@ public class GameRoomServiceImpl implements GameRoomService {
     private final GameRoomRepository gameRoomRepository;
     private final TeamRepository teamRepository;
     private final SimpMessagingTemplate messagingTemplate;
+    private final QuizAnswerRepository quizAnswerRepository;
 
     @Override
     public GameRoom createGameRoom() {
@@ -1589,6 +1608,48 @@ public class GameRoomServiceImpl implements GameRoomService {
         teams.forEach(team -> team.setGameRoom(gameRoom));
         teamRepository.saveAll(teams);
     }
+
+    // ODAYI SIFIRLAMA METODU
+    @Override
+    @Transactional
+    public void resetGameRoom(Long roomId) {
+        GameRoom room = getGameRoom(roomId);
+
+        // 1. Odaya ait verilmiÅŸ tÃ¼m geÃ§miÅŸ cevaplarÄ± (puanlarÄ±) sil
+        quizAnswerRepository.deleteByGameRoomId(roomId);
+
+        // 2. OdanÄ±n soru sayacÄ±nÄ± ve durumunu ilk haline getir
+        room.setState(GameRoomState.WAITING);
+        room.setCurrentQuestionId(null);
+        room.setCurrentQuestionIndex(null);
+        room.setQuestionStartedAt(null);
+        room.setStartedAt(null);
+        room.setEndedAt(null);
+
+        gameRoomRepository.save(room);
+
+        // 3. Frontend'e lobinin (WAITING) sÄ±fÄ±rlandÄ±ÄŸÄ±nÄ± haber ver
+        messagingTemplate.convertAndSend("/topic/room/" + roomId + "/state", "WAITING");
+    }
+
+    // ...
+    @Override
+    public void deleteGameRoom(Long roomId) {
+        GameRoom gameRoom = getGameRoom(roomId); // Bu metod zaten sadece aktif odalarÄ± bulur
+
+        // 1. Ã–nce takÄ±mlarÄ± bu odadan Ã§Ä±karalÄ±m (TakÄ±mlar tamamen silinmesin diye)
+        List<Team> teams = gameRoom.getTeams();
+        if (teams != null && !teams.isEmpty()) {
+            teams.forEach(team -> team.setGameRoom(null));
+            teamRepository.saveAll(teams);
+        }
+
+        // 2. OdayÄ± pasife Ã§ek (Soft Delete)
+        // BÃ¶ylece geÃ§miÅŸ veriler patlamaz ama oda listesinde (all) bir daha gÃ¶rÃ¼nmez.
+        gameRoom.setActive(false);
+        gameRoomRepository.save(gameRoom);
+    }
+// ...
 
     private GameRoomResponse toResponse(GameRoom gameRoom) {
         return new GameRoomResponse(
@@ -2081,6 +2142,8 @@ public interface QuizAnswerRepository extends JpaRepository<QuizAnswer, Long> {
     boolean existsByTeamAndQuestion(Team team, Question question);
 
     void deleteByTeamId(Long teamId);
+
+    void deleteByGameRoomId(Long gameRoomId);
 }
 === QuizService.java ===
 package com.murdergame.quiz.service;
@@ -2908,6 +2971,11 @@ public class TeamController {
         return teamService.getAllTeams();
     }
 
+    @GetMapping("/{teamId}")
+    public TeamResponse getTeam(@PathVariable Long teamId) {
+        return teamService.getTeamById(teamId);
+    }
+
     // Admin: User'Ä± takÄ±ma ekle (userId ile)
     @PostMapping("/admin/add-user/{teamId}")
     @PreAuthorize("hasRole('ADMIN')")
@@ -2994,7 +3062,10 @@ package com.murdergame.team.dto;
 public record TeamResponse(
         Long id,
         String teamNo,
-        Boolean active
+        Boolean active,
+        Integer memberCount,
+        Long spokespersonId,
+        Long gameRoomId
 ) {}
 === Team.java ===
 package com.murdergame.team.entity;
@@ -3086,6 +3157,8 @@ public interface TeamService {
     AddUserResponse setSpokesperson(Long teamId, Long userId);
 
     void deleteTeam(Long teamId);
+
+    TeamResponse getTeamById(Long teamId);
 }
 === TeamServiceImpl.java ===
 package com.murdergame.team.service.impl;
@@ -3105,6 +3178,7 @@ import com.murdergame.team.service.TeamService;
 import com.murdergame.user.entity.User;
 import com.murdergame.user.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -3120,6 +3194,7 @@ public class TeamServiceImpl implements TeamService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final QuizAnswerRepository quizAnswerRepository;
+    private final SimpMessagingTemplate messagingTemplate;
 
     @Override
     public TeamResponse createTeam(CreateTeamRequest request) {
@@ -3137,11 +3212,20 @@ public class TeamServiceImpl implements TeamService {
     }
 
     @Override
+    @Transactional(readOnly = true)
     public List<TeamResponse> getAllTeams() {
         return teamRepository.findAll()
                 .stream()
                 .map(this::toResponse)
                 .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public TeamResponse getTeamById(Long teamId) {
+        Team team = teamRepository.findById(teamId)
+                .orElseThrow(() -> new ResourceNotFoundException("TakÄ±m bulunamadÄ±"));
+        return toResponse(team);
     }
 
     @Override
@@ -3180,20 +3264,16 @@ public class TeamServiceImpl implements TeamService {
 
     @Override
     public AddUserResponse addUserToTeam(Long teamId, Long userId) {
-        // User var mÄ±?
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new RuntimeException("KullanÄ±cÄ± bulunamadÄ±"));
 
-        // User zaten bir takÄ±mda mÄ±?
         if (user.getTeam() != null) {
             throw new RuntimeException("KullanÄ±cÄ± zaten bir takÄ±mda");
         }
 
-        // TakÄ±m var mÄ±?
         Team team = teamRepository.findById(teamId)
                 .orElseThrow(() -> new RuntimeException("TakÄ±m bulunamadÄ±"));
 
-        // Admin user'Ä± takÄ±ma ekle
         user.setTeam(team);
         User saved = userRepository.save(user);
 
@@ -3229,7 +3309,6 @@ public class TeamServiceImpl implements TeamService {
         );
     }
 
-    // YENÄ° EKLENEN METOT
     @Override
     public AddUserResponse setSpokesperson(Long teamId, Long userId) {
         Team team = teamRepository.findById(teamId)
@@ -3246,6 +3325,9 @@ public class TeamServiceImpl implements TeamService {
         team.setSpokespersonId(userId);
         Team saved = teamRepository.save(team);
 
+        // YENÄ°: SÃ¶zcÃ¼ atandÄ±ÄŸÄ± an takÄ±ma canlÄ± bildirim gÃ¶nder
+        messagingTemplate.convertAndSend("/topic/team/" + teamId + "/spokesperson", userId);
+
         return new AddUserResponse(
                 user.getId(),
                 user.getUsername(),
@@ -3256,7 +3338,6 @@ public class TeamServiceImpl implements TeamService {
     }
 
     @Override
-    @Transactional
     public void deleteTeam(Long teamId) {
 
         Team team = teamRepository.findById(teamId)
@@ -3273,7 +3354,16 @@ public class TeamServiceImpl implements TeamService {
     }
 
     private TeamResponse toResponse(Team team) {
-        return new TeamResponse(team.getId(), team.getTeamNo(), team.getActive());
+        int memberCount = userRepository.countByTeamId(team.getId());
+
+        return new TeamResponse(
+                team.getId(),
+                team.getTeamNo(),
+                team.getActive(),
+                memberCount,
+                team.getSpokespersonId(),
+                team.getGameRoom() != null ? team.getGameRoom().getId() : null
+        );
     }
 }
 === User.java ===
@@ -3338,8 +3428,12 @@ public interface UserRepository extends JpaRepository<User, Long> {
     boolean existsByTeamIdAndUsername(Long teamId, String username);
     Optional<User> findByTeamIdAndUsername(Long teamId, String username);
     Optional<User> findByTeamIdAndUsernameAndActiveTrue(Long teamId, String username);
+    // YENÄ° EKLENEN METOT
+    Optional<User> findByUsernameAndActiveTrue(String username);
     boolean existsByUsername(String username);  // â† BUNU EKLE
     Optional<User> findByUsername(String username);
+
+    int countByTeamId(Long teamId);
 
     @Modifying
     @Transactional

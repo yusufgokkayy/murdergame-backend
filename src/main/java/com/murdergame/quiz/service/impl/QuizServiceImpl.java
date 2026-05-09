@@ -30,7 +30,7 @@ public class QuizServiceImpl implements QuizService {
 
     @Override
     public List<QuestionResponse> getQuestionsByGameRoom(Long gameRoomId) {
-        return questionRepository.findByGameRoomId(gameRoomId)
+        return questionRepository.findByGameRoomIdAndActiveTrue(gameRoomId)
                 .stream()
                 .map(this::mapToQuestionResponse)
                 .toList();

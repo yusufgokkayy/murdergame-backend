@@ -6,6 +6,7 @@ import com.murdergame.game.entity.GameRoom;
 import com.murdergame.game.entity.GameRoomState;
 import com.murdergame.game.repository.GameRoomRepository;
 import com.murdergame.game.service.GameRoomService;
+import com.murdergame.quiz.repository.QuestionRepository;
 import com.murdergame.quiz.repository.QuizAnswerRepository;
 import com.murdergame.team.entity.Team;
 import com.murdergame.team.repository.TeamRepository;
@@ -27,6 +28,7 @@ public class GameRoomServiceImpl implements GameRoomService {
     private final TeamRepository teamRepository;
     private final SimpMessagingTemplate messagingTemplate;
     private final QuizAnswerRepository quizAnswerRepository;
+    private final QuestionRepository questionRepository;
 
     @Override
     public GameRoom createGameRoom() {
@@ -160,6 +162,31 @@ public class GameRoomServiceImpl implements GameRoomService {
         // Böylece geçmiş veriler patlamaz ama oda listesinde (all) bir daha görünmez.
         gameRoom.setActive(false);
         gameRoomRepository.save(gameRoom);
+    }
+
+    @Override
+    @Transactional
+    public void resetGameRoomQuestionsOnly(Long roomId) {
+        GameRoom room = getGameRoom(roomId);
+
+        // 1. Önce bu odadaki soruların cevaplarını sil (FK constraint için)
+        //    ANCAK puanları korumak istiyoruz — bu satırı EKLEME:
+        // quizAnswerRepository.deleteByGameRoomId(roomId); // <-- BU YOK!
+
+        questionRepository.deactivateByGameRoomId(roomId);
+
+        // 3. Oda sayaçlarını sıfırla, state WAITING'e al
+        room.setState(GameRoomState.WAITING);
+        room.setCurrentQuestionId(null);
+        room.setCurrentQuestionIndex(null);
+        room.setQuestionStartedAt(null);
+        room.setStartedAt(null);
+        room.setEndedAt(null);
+
+        gameRoomRepository.save(room);
+
+        // 4. Frontend'e bildir
+        messagingTemplate.convertAndSend("/topic/room/" + roomId + "/state", "WAITING");
     }
 // ...
 

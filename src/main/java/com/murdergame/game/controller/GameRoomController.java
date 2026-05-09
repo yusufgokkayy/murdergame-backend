@@ -7,6 +7,7 @@ import com.murdergame.game.entity.GameRoom;
 import com.murdergame.game.service.GameRoomService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
@@ -79,5 +80,13 @@ public class GameRoomController {
     @ResponseStatus(HttpStatus.OK)
     public void deleteGameRoom(@PathVariable Long roomId) {
         gameRoomService.deleteGameRoom(roomId);
+    }
+
+    // Sadece soruları siler, puanları (QuizAnswer) korur
+    @PostMapping("/{roomId}/reset-questions")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<Void> resetGameRoomQuestionsOnly(@PathVariable Long roomId) {
+        gameRoomService.resetGameRoomQuestionsOnly(roomId);
+        return ResponseEntity.ok().build();
     }
 }

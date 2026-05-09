@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <title>Sözcü - Katil Kim Tahmin Ekranı</title>
+    <script src="https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f0f0f; color: #fff; padding: 30px; display: flex; justify-content: center; }
+        .card { background: #1e1e1e; padding: 25px; border-radius: 10px; width: 100%; max-width: 400px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
+        h2 { text-align: center; color: #ff5555; margin-top: 0; }
+        label { font-size: 13px; color: #aaa; margin-bottom: 5px; display: block; }
+        input { width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #333; background: #2a2a2a; color: white; border-radius: 5px; box-sizing: border-box; }
+        button { width: 100%; padding: 12px; background: #ff5555; color: white; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; transition: 0.3s; }
+        button:hover { background: #ff3333; }
+        #logs { background: #000; padding: 10px; height: 150px; overflow-y: auto; font-family: monospace; font-size: 12px; color: #0f0; border-radius: 5px; margin-top: 15px; border: 1px solid #333; }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <h2>🕵️ Sözcü Tahmin Ekranı</h2>
+
+    <label>Geçerli User/Sözcü Token (Bearer hariç)</label>
+    <input type="text" id="token" placeholder="eyJhbGciOiJIUzI1Ni...">
+
+    <div style="display:flex; gap:10px;">
+        <div style="flex:1;">
+            <label>Oda ID (ClueGame)</label>
+            <input type="number" id="clueGameId" value="1">
+        </div>
+        <div style="flex:1;">
+            <label>Takım ID</label>
+            <input type="number" id="teamId" value="1">
+        </div>
+    </div>
+
+    <label>Tahmininiz (Katil Kim?)</label>
+    <input type="text" id="guess" placeholder="Örn: Ahmet Bey, o saatte oradaydı.">
+
+    <button onclick="sendGuess()">Tahmini Yolla!</button>
+
+    <div id="logs">Sistem hazır...<br></div>
+</div>
+
+<script>
+    let stompClient = null;
+
+    function log(msg) {
+        const l = document.getElementById('logs');
+        l.innerHTML += `> ${msg}<br>`;
+        l.scrollTop = l.scrollHeight;
+    }
+
+    function sendGuess() {
+        const token = document.getElementById('token').value.trim();
+        const clueGameId = document.getElementById('clueGameId').value;
+        const teamId = document.getElementById('teamId').value;
+        const guess = document.getElementById('guess').value.trim();
+
+        if(!token || !guess) { alert("Token ve tahmin boş olamaz!"); return; }
+
+        const socket = new SockJS('https://murdergame-backend-production.up.railway.app/ws');
+        stompClient = Stomp.over(socket);
+        stompClient.debug = null;
+
+        log("Sunucuya bağlanılıyor...");
+
+        stompClient.connect({'Authorization': 'Bearer ' + token}, function(frame) {
+            log("✅ Bağlantı Başarılı!");
+
+            // Kendi takım kanalımıza abone olalım ki onay geldiğini görelim
+            stompClient.subscribe(`/topic/clue-game/${teamId}/guesses`, function(res) {
+                log("📩 Sunucudan Onay Geldi!");
+                stompClient.disconnect(() => log("Bağlantı kapatıldı."));
+            });
+
+            const payload = {
+                clueGameId: parseInt(clueGameId),
+                teamId: parseInt(teamId),
+                guessedName: guess
+            };
+
+            stompClient.send("/app/clue-guess", {}, JSON.stringify(payload));
+            log(`🚀 Tahmin fırlatıldı: ${guess}`);
+
+        }, function(err) {
+            log("❌ HATA: " + err);
+        });
+    }
+</script>
+</body>
+</html>
