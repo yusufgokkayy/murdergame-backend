@@ -32,3 +32,6 @@ build/
 
 ### VS Code ###
 .vscode/
+
+# Local debug dumps
+desktop_output*.txt

@@ -37,7 +37,7 @@ This is the backend server for **Murder Game**, a real-time multiplayer team gam
 * **Spring Security & JWT** (JSON Web Tokens)
 * **Spring WebSockets & STOMP**
 * **Spring Data JPA & Hibernate**
-* **Database:** (e.g., PostgreSQL/MySQL/H2)
+* **PostgreSQL** (Railway)
 * **Lombok**
 
 ## 🌐 API Endpoints Reference
