@@ -130,3 +130,7 @@ Connection Endpoint: `/ws` (Secured via JWT Channel Interceptor)
 * `cluegame`: Murder mystery entity and event handlers.
 * `team`: Team creation and Spokesperson assignment.
 * `results`: Complex data aggregation for end-of-game statistics.
+
+## License
+
+All Rights Reserved. This code is published for viewing and evaluation only; see [LICENSE](LICENSE).
